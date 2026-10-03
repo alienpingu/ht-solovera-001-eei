@@ -56,7 +56,7 @@ export function isLand(row: number, col: number): boolean {
   return ISLAND[row][col] !== "water";
 }
 
-export type BuildingKind = "extractor" | "house" | "eco";
+export type BuildingKind = "factory" | "house" | "eco";
 
 /**
  * Opaque 3D-model descriptor. `dir`/`obj`/`tex` name files under
@@ -83,6 +83,13 @@ export interface BuildingModelConfig {
   offsetX: number;
   offsetY: number;
   offsetZ: number;
+  /**
+   * Screen-space raise (px) so the base sits on the grass. The mesh anchors at
+   * the cell's bottom vertex; raising by half the footprint diamond height
+   * ((footW+footH)*HALF_H/2) puts the base's front tip back on that vertex
+   * (factory = 115.5px, house = 99px, tree = 33px).
+   */
+  raisePx: number;
   /** Static button preview under /assets/models/<dir>/. */
   preview: string;
 }
@@ -113,14 +120,14 @@ export interface BuildingDef {
 }
 
 export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
-  extractor: {
-    label: "Extractor",
+  factory: {
+    label: "Factory",
     sheet: "buildings",
     texture: "buildingTiles_118.png",
     footW: 4,
     footH: 3,
     model: {
-      dir: "extractor",
+      dir: "factory",
       obj: "building-m.obj",
       tex: "colormap.png",
       scale: 2.32075,
@@ -128,15 +135,16 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
       offsetX: 0,
       offsetY: 0,
       offsetZ: 0,
-      preview: "/assets/models/extractor/building-m.png",
+      raisePx: 115.5,
+      preview: "/assets/models/factory/building-m.png",
     },
     cost: 30,
     refundRatio: 0.5,
-    income: 4,
-    pollution: 3,
+    income: 3,
+    pollution: 4,
     popGrowth: 0,
     popNeedHealth: 0,
-    desc: "+$4/tick, pollution +3",
+    desc: "+$3/tick, pollution +4",
   },
   house: {
     label: "House",
@@ -153,12 +161,13 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
       offsetX: 0.43413711,
       offsetY: 0,
       offsetZ: -0.274,
+      raisePx: 99,
       preview: "/assets/models/house/building-i.png",
     },
     cost: 20,
     refundRatio: 0.5,
     income: 0,
-    pollution: 1,
+    pollution: 2,
     popGrowth: 1,
     popNeedHealth: 40,
     desc: "+1 pop/tick (needs health ≥ 40)",
@@ -178,9 +187,10 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
       offsetX: 0,
       offsetY: 0,
       offsetZ: 0,
+      raisePx: 33,
       preview: "/assets/models/tree/tree.png",
     },
-    cost: 20,
+    cost: 15,
     refundRatio: 0.5,
     income: 0,
     pollution: -1,
@@ -191,4 +201,4 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
 };
 
 /** UI order for the build menu. */
-export const BUILDING_ORDER: BuildingKind[] = ["extractor", "house", "eco"];
+export const BUILDING_ORDER: BuildingKind[] = ["factory", "house", "eco"];

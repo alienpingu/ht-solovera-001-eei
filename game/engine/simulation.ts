@@ -38,12 +38,16 @@ export interface SimState {
   /** 0..100. Pollution drives health loss; at 100 the island dies. */
   pollution: number;
   gameOver: boolean;
+  /** True once the settlement has survived TARGET_DAYS ticks. */
+  won: boolean;
   /** Building grid, row-major. null = empty cell. */
   grid: (GridCell | null)[][];
 }
 
 export const START_MONEY = 50;
 export const MAX_POLLUTION = 100;
+/** Ticks to survive to win the run (the mission goal). */
+export const TARGET_DAYS = 365;
 /** Real-time ms between simulation ticks (the game's "second"). */
 export const TICK_MS = 1000;
 
@@ -59,6 +63,7 @@ export function createInitialState(): SimState {
     health: MAX_POLLUTION,
     pollution: 0,
     gameOver: false,
+    won: false,
     grid: Array.from({ length: GRID_H }, () =>
       Array<GridCell | null>(GRID_W).fill(null),
     ),
@@ -116,6 +121,7 @@ export function canBuild(
   kind: BuildingKind,
 ): ActionResult {
   if (state.gameOver) return { ok: false, reason: "The island has fallen" };
+  if (state.won) return { ok: false, reason: "The settlement has been secured" };
   for (const cell of footprintCells(row, col, kind)) {
     if (cell.row < 0 || cell.row >= GRID_H || cell.col < 0 || cell.col >= GRID_W) {
       return { ok: false, reason: "Building would hang off the island" };
@@ -166,15 +172,17 @@ function clamp(v: number, min: number, max: number): number {
  * the argument. Order matters and is deliberate:
  *   1. sum income + pollution from every building on the grid (each building
  *      counted ONCE, at its anchor cell — a multi-tile footprint shares one
- *      anchor record, so without the anchor guard a 4x3 extractor would bill
+ *      anchor record, so without the anchor guard a 4x3 factory would bill
  *      12x its income/pollution)
  *   2. apply money, clamp pollution to [0,100]
  *   3. health is a derived quantity (100 - pollution)
  *   4. population grows only while the island is healthy enough
  *   5. pollution == 100 kills the island (game over)
+ *   6. surviving TARGET_DAYS ticks wins the run (win takes precedence over a
+ *      death only because the two checks are mutually exclusive by tick count)
  */
 export function tick(state: SimState): SimState {
-  if (state.gameOver) return state;
+  if (state.gameOver || state.won) return state;
 
   let income = 0;
   let pollution = 0;
@@ -208,6 +216,8 @@ export function tick(state: SimState): SimState {
   if (next.pollution >= MAX_POLLUTION) {
     next.health = 0;
     next.gameOver = true;
+  } else if (next.tick >= TARGET_DAYS) {
+    next.won = true;
   }
   return next;
 }

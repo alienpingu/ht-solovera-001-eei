@@ -140,7 +140,10 @@ export class MainScene extends Phaser.Scene {
     this.scale.on(Phaser.Scale.Events.RESIZE, this.fitCamera, this);
     this.wireInput();
     this.wireBus();
-    this.tickTimer = this.createTickTimer();
+    // The tick timer is NOT created here: the run stays paused (Day 0) until
+    // React emits sim:start from the welcome dialog. A remounted MainScene
+    // (StrictMode/HMR) re-boots paused, and sim:boot lets React resume it.
+    bus.emit("sim:boot");
 
     // Push the initial state so the HUD is correct on first paint.
     bus.emit("sim:update", this.state);
@@ -247,7 +250,9 @@ export class MainScene extends Phaser.Scene {
       obj.setOrigin(0.5, 1);
     }
     this.iso.add(obj);
-    obj.setPosition(pos.x, pos.y);
+    // Meshes anchor at the cell's bottom vertex; raise them so the base sits on
+    // the grass. Sprites are already bottom-anchored at that vertex.
+    obj.setPosition(pos.x, obj instanceof Phaser.GameObjects.Mesh ? pos.y - def.model.raisePx : pos.y);
     obj.setDepth(MainScene.buildingDepth(row, col, kind));
     this.buildingSprites.set(CELL_KEY(row, col), obj);
     this.sortIso();
@@ -608,7 +613,7 @@ export class MainScene extends Phaser.Scene {
     const def = BUILDING_DEFS[kind];
 
     if (this.ghostMesh) {
-      this.ghostMesh.setPosition(pos.x, pos.y);
+      this.ghostMesh.setPosition(pos.x, pos.y - def.model.raisePx);
       this.ghostMesh.setTint(tint);
       this.ghostMesh.setVisible(true);
       this.ghost.setVisible(false);
@@ -647,6 +652,7 @@ export class MainScene extends Phaser.Scene {
         this.updateGhost();
       }),
       bus.on("sim:restart", () => this.restartRun()),
+      bus.on("sim:start", () => this.startRun()),
     );
     // Always clean up listeners + timers on scene teardown (HMR/navigation).
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -666,16 +672,22 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  /** Begin the run: create the tick timer if it isn't already running. */
+  private startRun(): void {
+    if (!this.tickTimer) this.tickTimer = this.createTickTimer();
+  }
+
   private advance(): void {
     const next = tick(this.state);
     const justDied = next.gameOver && !this.state.gameOver;
+    const justWon = next.won && !this.state.won;
     this.state = next;
-    if (justDied) {
-      // Freeze the simulation on death; the React modal drives restart.
+    if (justDied || justWon) {
+      // Freeze the simulation on either ending; the React modal drives restart.
       this.tickTimer?.remove();
       this.tickTimer = undefined;
       this.setGhostVisible(false);
-      bus.emit("sim:gameover", next);
+      bus.emit(justWon ? "sim:win" : "sim:gameover", next);
     }
     bus.emit("sim:update", this.state);
   }

@@ -26,6 +26,10 @@ export type GameEvents = {
   "sim:update": [state: SimState];
   /** Phaser -> React: the island died. */
   "sim:gameover": [state: SimState];
+  /** Phaser -> React: the settlement survived TARGET_DAYS. */
+  "sim:win": [state: SimState];
+  /** Phaser -> React: a fresh MainScene finished create() and is paused. */
+  "sim:boot": [];
   /** React -> Phaser: user picked (or cleared) a building from the menu. */
   "build:select": [kind: BuildingKind | null];
   /** Phaser -> React: a building was placed (for toasts / logging). */
@@ -36,6 +40,8 @@ export type GameEvents = {
   "ui:error": [message: string];
   /** React -> Phaser: restart the run with a fresh island. */
   "sim:restart": [];
+  /** React -> Phaser: begin ticking (leaves the welcome/story overlay). */
+  "sim:start": [];
 };
 
 export class EventBus<Events extends Record<string, unknown[]>> {

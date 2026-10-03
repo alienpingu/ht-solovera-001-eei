@@ -188,7 +188,7 @@ npm run dev             # dev server (StrictMode double-mounts — GameCanvas mu
   colormap PNGs via OBJ UVs); the MTL diffuse color is ignored and UV textures
   (`map_Kd`) are not loadable by Phaser. The renderer is pinned to `Phaser.WEBGL`.
 - Footprints are axis-aligned rectangles with a center anchor (tree 1×1,
-  house 4×2, extractor 4×3). A footprint can't wrap the island edge or overlap
+  house 4×2, factory 4×3). A footprint can't wrap the island edge or overlap
   water/other buildings. Multi-height overlap (tall buildings behind short ones)
   relies on front-most-cell depth sorting; extreme cases may need per-face depth
   work.
