@@ -1,0 +1,543 @@
+import Phaser from "phaser";
+import {
+  ISO,
+  GRID_W,
+  GRID_H,
+  ISLAND,
+  DECOR,
+  GROUND_SHEET_INDEX,
+  BUILDING_DEFS,
+  isLand,
+} from "@/game/data/tiles";
+import type { BuildingKind } from "@/game/data/tiles";
+import {
+  createInitialState,
+  tick,
+  placeBuilding,
+  removeBuilding,
+  canBuild,
+  canAfford,
+  TICK_MS,
+} from "@/game/engine/simulation";
+import type { SimState } from "@/game/engine/simulation";
+import { bus } from "@/game/events/bus";
+
+const CELL_KEY = (row: number, col: number): string => `${row}:${col}`;
+
+/** Ghost tints: green = buildable + affordable, red = blocked. */
+const GHOST_OK = 0x3ddc84;
+const GHOST_BAD = 0xff5a5a;
+
+/**
+ * MainScene: renders the baked iso island, owns the authoritative SimState,
+ * and turns taps/drags into building/demolish actions forwarded to the pure
+ * engine.
+ *
+ * The ground grid is a real Phaser iso Tilemap layer fed by the uniform
+ * tileset baked in build-kenney-sheets.mjs. Buildings and decorative scatter
+ * are sprites on a container: their frames vary in height (trees, houses,
+ * machines) so they don't fit a uniform tileset cleanly, and per-sprite depth
+ * ((row+col)*2+1) keeps the iso overlap exact.
+ *
+ * The container stays at scale 1 and the CAMERA does all the fitting/zooming,
+ * which is what lets portrait phones go edge-to-edge and lets two-finger
+ * gestures pan/zoom without touching the iso math.
+ */
+export class MainScene extends Phaser.Scene {
+  private iso!: Phaser.GameObjects.Container;
+  private state!: SimState;
+
+  /** Buildings placed on the grid, keyed by `${row}:${col}`. */
+  private buildingSprites = new Map<string, Phaser.GameObjects.Image>();
+
+  /** Decorative scatter from island.json, same keying as buildings. */
+  private decorSprites = new Map<string, Phaser.GameObjects.Image>();
+
+  /** Translucent buildable/water overlay, drawn only while placing. */
+  private gridGraphics!: Phaser.GameObjects.Graphics;
+
+  /** Ghost = the selected building frame (tinted) + a diamond outline. */
+  private ghost!: Phaser.GameObjects.Image;
+  private ghostOutline!: Phaser.GameObjects.Image;
+  private hovered: { row: number; col: number } | null = null;
+  private selectedKind: BuildingKind | null = null;
+
+  // Tap-vs-drag: a sloppy touch move shouldn't commit a demolish. In build
+  // mode we intentionally allow drag-to-place, so the threshold only guards
+  // demolish taps. `downId` keeps us honest under multi-touch.
+  private downWorld = new Phaser.Math.Vector2();
+  private downId = -1;
+
+  // Two-finger gestures. Screen-space (p.x/p.y) is deliberate: using world
+  // coords would feed the camera's own scroll back into the pan and drift.
+  private activePointers = new Map<number, { x: number; y: number }>();
+  private gestureActive = false;
+  private lastPinchDist = 0;
+  private lastMid = new Phaser.Math.Vector2();
+
+  private minZoom = 0.2;
+  private maxZoom = 3;
+
+  private tickTimer?: Phaser.Time.TimerEvent;
+  private unsubs: (() => void)[] = [];
+
+  constructor() {
+    super("MainScene");
+  }
+
+  create(): void {
+    this.state = createInitialState();
+    // Ground first (separate display object below the container).
+    this.renderGround();
+    this.iso = this.add.container(0, 0);
+
+    // Build overlay sits under every object (objects are depth >= 1).
+    this.gridGraphics = this.add.graphics();
+    this.gridGraphics.setDepth(0);
+    this.iso.add(this.gridGraphics);
+
+    this.renderDecor();
+
+    // Ghost building sprite + the diamond outline that nests with the ground.
+    this.ghostOutline = new Phaser.GameObjects.Image(this, 0, 0, "ghost-ok");
+    this.ghostOutline.setOrigin(0.5, 1).setDepth(999).setVisible(false);
+    this.ghost = new Phaser.GameObjects.Image(this, 0, 0, "placeholder");
+    this.ghost.setOrigin(0.5, 1).setDepth(1000).setVisible(false);
+    this.iso.add(this.ghostOutline);
+    this.iso.add(this.ghost);
+
+    // A second extra pointer so two-finger pinch/pan always has input slots.
+    this.input.addPointer(1);
+
+    this.fitCamera();
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.fitCamera, this);
+    this.wireInput();
+    this.wireBus();
+    this.tickTimer = this.createTickTimer();
+
+    // Push the initial state so the HUD is correct on first paint.
+    bus.emit("sim:update", this.state);
+  }
+
+  // ------------------------------------------------------------------
+  // Rendering
+  // ------------------------------------------------------------------
+
+  /**
+   * Build the ground as an isometric Tilemap layer. Phaser defaults a blank
+   * map to orthographic, so flip the orientation first. The baked tileset
+   * frames are 132x83 whose ground art spans y=1..81 (measured by pixel
+   * analysis); tileOffset.y=17 replicates the old bottom-anchored sprite
+   * rendering exactly.
+   */
+  private renderGround(): void {
+    const map = this.add.tilemap(undefined, ISO.TILE_W, ISO.TILE_H, GRID_W, GRID_H);
+    // Phaser typings call this a string but the renderer switches on the
+    // numeric orientation enum — cast the enum value through.
+    map.orientation = Phaser.Tilemaps.Orientation.ISOMETRIC as unknown as string;
+    const tileset = map.addTilesetImage(
+      "ground-sheet",
+      "ground-sheet",
+      ISO.TILE_W,
+      ISO.TILE_H + 17,
+      0,
+      0,
+      undefined,
+      new Phaser.Math.Vector2(0, 17),
+    );
+    if (!tileset) throw new Error("missing ground-sheet tileset");
+    const layer = map.createBlankLayer(
+      "ground",
+      tileset,
+      0,
+      0,
+      GRID_W,
+      GRID_H,
+      ISO.TILE_W,
+      ISO.TILE_H,
+    );
+    if (!layer) throw new Error("failed to create ground layer");
+    layer.skipCull = true; // 10x10 map — iso culling is pure overhead here
+    for (let r = 0; r < GRID_H; r++) {
+      for (let c = 0; c < GRID_W; c++) {
+        layer.putTileAt(GROUND_SHEET_INDEX[ISLAND[r][c]], c, r);
+      }
+    }
+    // The layer's local origin is cell (0,0)'s TOP vertex; the container's is
+    // that cell's bottom vertex — one tile height apart.
+    layer.setPosition(0, -ISO.TILE_H);
+  }
+
+  /**
+   * Make a sprite for an atlas frame, falling back to the baked placeholder if
+   * the atlas/frame is missing. Passing the frame as the TEXTURE key was the
+   * old bug that rendered Phaser's green-cross `__MISSING` over every object.
+   */
+  private makeSprite(sheet: string, frame: string): Phaser.GameObjects.Image {
+    const texture = this.textures.get(sheet);
+    if (texture && texture.has(frame)) {
+      return new Phaser.GameObjects.Image(this, 0, 0, sheet, frame);
+    }
+    return new Phaser.GameObjects.Image(this, 0, 0, "placeholder");
+  }
+
+  private addDecorSprite(d: { row: number; col: number; frame: string }): void {
+    const img = this.makeSprite("landscape", d.frame);
+    this.iso.add(img);
+    img.setOrigin(0.5, 1);
+    const pos = MainScene.isoToWorld(d.col, d.row);
+    img.setPosition(pos.x, pos.y);
+    // Same depth band as buildings so a bush/tree in front still overlaps a
+    // building behind it (row+col orders front-to-back).
+    img.setDepth((d.row + d.col) * 2 + 1);
+    this.decorSprites.set(CELL_KEY(d.row, d.col), img);
+    this.sortIso();
+  }
+
+  private removeDecorAt(row: number, col: number): void {
+    const img = this.decorSprites.get(CELL_KEY(row, col));
+    if (img) {
+      img.destroy();
+      this.decorSprites.delete(CELL_KEY(row, col));
+    }
+  }
+
+  /** Restore the baked decor for a cell after its building was demolished. */
+  private restoreDecorAt(row: number, col: number): void {
+    if (this.decorSprites.has(CELL_KEY(row, col))) return;
+    const d = DECOR.find((x) => x.row === row && x.col === col);
+    if (d) this.addDecorSprite(d);
+  }
+
+  private renderDecor(): void {
+    for (const d of DECOR) this.addDecorSprite(d);
+  }
+
+  private addBuildingSprite(row: number, col: number, kind: BuildingKind): void {
+    const def = BUILDING_DEFS[kind];
+    const img = this.makeSprite(def.sheet, def.texture);
+    this.iso.add(img);
+    img.setOrigin(0.5, 1);
+    const pos = MainScene.isoToWorld(col, row);
+    img.setPosition(pos.x, pos.y);
+    img.setDepth((row + col) * 2 + 1);
+    this.buildingSprites.set(CELL_KEY(row, col), img);
+    this.sortIso();
+  }
+
+  /**
+   * Container children render in insertion order — per-child `depth` is not
+   * applied automatically — so sort explicitly to keep iso front/back
+   * overlap correct as buildings/decor are added.
+   */
+  private sortIso(): void {
+    this.iso.sort("depth");
+  }
+
+  private removeBuildingSprite(row: number, col: number): void {
+    const img = this.buildingSprites.get(CELL_KEY(row, col));
+    if (img) {
+      img.destroy();
+      this.buildingSprites.delete(CELL_KEY(row, col));
+    }
+  }
+
+  /**
+   * Draw the buildable-area overlay: green diamonds on free land, amber on
+   * occupied land, red on water, plus a faint grid. Redrawn only on selection
+   * / state changes (never per frame), so 100 cells is free.
+   */
+  private drawBuildGrid(): void {
+    const g = this.gridGraphics;
+    g.clear();
+    if (!this.selectedKind) return;
+
+    for (let r = 0; r < GRID_H; r++) {
+      for (let c = 0; c < GRID_W; c++) {
+        const p = MainScene.isoToWorld(c, r);
+        const occupied = this.state.grid[r][c] !== null;
+        let fill = 0xff5a5a; // water / blocked
+        if (isLand(r, c)) fill = occupied ? 0xf5a524 : 0x3ddc84;
+        g.fillStyle(fill, 0.16);
+        g.beginPath();
+        g.moveTo(p.x, p.y - ISO.TILE_H);
+        g.lineTo(p.x + ISO.HALF_W, p.y - ISO.HALF_H);
+        g.lineTo(p.x, p.y);
+        g.lineTo(p.x - ISO.HALF_W, p.y - ISO.HALF_H);
+        g.closePath();
+        g.fillPath();
+        g.lineStyle(1, 0xffffff, 0.12);
+        g.strokePath();
+      }
+    }
+  }
+
+  /**
+   * Fit the island with the CAMERA (zoom + bounds) rather than by scaling the
+   * container. Runs on every resize, so portrait/landscape both stay
+   * edge-to-edge. Bounds give us free pan clamping.
+   */
+  private fitCamera(): void {
+    const cam = this.cameras.main;
+    const margin = ISO.TILE_H;
+    const minX = -(GRID_H - 1) * ISO.HALF_W - ISO.HALF_W;
+    const maxX = (GRID_W - 1) * ISO.HALF_W + ISO.HALF_W;
+    const minY = -ISO.TILE_H * 2; // headroom for tall trees above row 0
+    const maxY = (GRID_W - 1 + GRID_H - 1) * ISO.HALF_H + margin;
+    const mapW = maxX - minX;
+    const mapH = maxY - minY;
+
+    const vw = this.scale.width;
+    const vh = this.scale.height;
+    const PAD = 0.92; // breathing room around the island
+    const zoom = Math.min(vw / mapW, vh / mapH) * PAD;
+    this.minZoom = zoom * 0.6;
+    this.maxZoom = zoom * 3;
+
+    cam.setBounds(minX, minY, mapW, mapH);
+    // Refit on every resize; the user can still pinch in/out afterwards.
+    cam.setZoom(Phaser.Math.Clamp(zoom, this.minZoom, this.maxZoom));
+    cam.centerOn((minX + maxX) / 2, (minY + maxY) / 2);
+    this.drawBuildGrid();
+  }
+
+  // ------------------------------------------------------------------
+  // Input
+  // ------------------------------------------------------------------
+
+  private wireInput(): void {
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      this.activePointers.set(p.id, { x: p.x, y: p.y });
+      if (this.activePointers.size >= 2) {
+        // Second finger: cancel any pending placement, start a gesture.
+        this.gestureActive = true;
+        this.downId = -1;
+        this.setGhostVisible(false);
+        this.resetGestureBaseline();
+        return;
+      }
+      this.downId = p.id;
+      this.downWorld.set(p.worldX, p.worldY);
+      // Show the ghost immediately under the finger (touch has no hover).
+      this.hovered = this.worldToCell(p.worldX, p.worldY);
+      this.updateGhost();
+    });
+
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+      if (this.activePointers.has(p.id)) {
+        this.activePointers.set(p.id, { x: p.x, y: p.y });
+      }
+      if (this.gestureActive && this.activePointers.size >= 2) {
+        this.handleGesture();
+        return;
+      }
+      // Mouse hover (or single-finger drag) moves the ghost.
+      this.hovered = this.worldToCell(p.worldX, p.worldY);
+      this.updateGhost();
+    });
+
+    const endPointer = (p: Phaser.Input.Pointer): void => {
+      this.activePointers.delete(p.id);
+      if (this.activePointers.size < 2) {
+        this.gestureActive = false;
+        this.resetGestureBaseline();
+      }
+      if (this.gestureActive || p.id !== this.downId) return;
+      this.downId = -1;
+
+      if (this.selectedKind) {
+        // Drag-to-place: commit wherever the ghost last sat.
+        if (this.hovered) this.commitAt(this.hovered.row, this.hovered.col);
+      } else {
+        const dx = p.worldX - this.downWorld.x;
+        const dy = p.worldY - this.downWorld.y;
+        if (Math.hypot(dx, dy) <= 6) this.handleDemolishTap(p.worldX, p.worldY);
+      }
+    };
+    this.input.on("pointerup", endPointer);
+    this.input.on("pointerupoutside", endPointer);
+  }
+
+  private resetGestureBaseline(): void {
+    this.lastPinchDist = 0;
+  }
+
+  /** Pinch = zoom; two-finger midpoint drag = pan. Both in screen space. */
+  private handleGesture(): void {
+    const pts = [...this.activePointers.values()];
+    if (pts.length < 2) return;
+    const [a, b] = pts;
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const cam = this.cameras.main;
+
+    if (this.lastPinchDist > 0) {
+      const ratio = dist / this.lastPinchDist;
+      cam.zoom = Phaser.Math.Clamp(cam.zoom * ratio, this.minZoom, this.maxZoom);
+      cam.scrollX -= (midX - this.lastMid.x) / cam.zoom;
+      cam.scrollY -= (midY - this.lastMid.y) / cam.zoom;
+    }
+    this.lastPinchDist = dist;
+    this.lastMid.set(midX, midY);
+  }
+
+  /** Convert a world-space point to a grid cell, or null if off the map. */
+  private worldToCell(worldX: number, worldY: number): { row: number; col: number } | null {
+    // getLocalPoint maps world coords into the iso container's local space,
+    // already accounting for the camera transform and container transform.
+    const local = this.iso.getLocalPoint(worldX, worldY);
+    const a = local.x / ISO.HALF_W;
+    const b = local.y / ISO.HALF_H;
+    const col = Math.round((a + b) / 2);
+    const row = Math.round((b - a) / 2);
+    if (row < 0 || row >= GRID_H || col < 0 || col >= GRID_W) return null;
+
+    // Snap check: is the point actually inside THIS cell's diamond and not a
+    // neighbouring cell's (rounding can land us on a corner neighbour)?
+    const cell = MainScene.isoToWorld(col, row);
+    const dx = local.x - cell.x;
+    const dy = local.y - cell.y;
+    if (Math.abs(dx) / ISO.HALF_W + Math.abs(dy) / ISO.HALF_H > 1) return null;
+    return { row, col };
+  }
+
+  private commitAt(row: number, col: number): void {
+    const kind = this.selectedKind;
+    if (!kind) return;
+    const res = placeBuilding(this.state, row, col, kind);
+    if (res.ok) {
+      this.state = res.state;
+      // A building takes over its cell, so clear any baked decor on it.
+      this.removeDecorAt(row, col);
+      this.addBuildingSprite(row, col, kind);
+      bus.emit("build:placed", { row, col, kind });
+      bus.emit("sim:update", this.state);
+      this.drawBuildGrid();
+    } else {
+      bus.emit("ui:error", res.reason);
+    }
+    this.updateGhost();
+  }
+
+  private handleDemolishTap(worldX: number, worldY: number): void {
+    const cell = this.worldToCell(worldX, worldY);
+    if (!cell) return;
+    const res = removeBuilding(this.state, cell.row, cell.col);
+    if (res.ok) {
+      this.state = res.state;
+      this.removeBuildingSprite(cell.row, cell.col);
+      this.restoreDecorAt(cell.row, cell.col);
+      bus.emit("build:removed", { row: cell.row, col: cell.col });
+      bus.emit("sim:update", this.state);
+    } else {
+      bus.emit("ui:error", res.reason);
+    }
+    this.updateGhost();
+  }
+
+  private setGhostVisible(visible: boolean): void {
+    this.ghost.setVisible(visible);
+    this.ghostOutline.setVisible(visible);
+  }
+
+  private updateGhost(): void {
+    const kind = this.selectedKind;
+    const cell = this.hovered;
+    if (!kind || !cell || this.state.gameOver) {
+      this.setGhostVisible(false);
+      return;
+    }
+    const pos = MainScene.isoToWorld(cell.col, cell.row);
+    const ok = canBuild(this.state, cell.row, cell.col).ok && canAfford(this.state, kind);
+    const def = BUILDING_DEFS[kind];
+
+    this.ghost.setPosition(pos.x, pos.y);
+    if (this.ghost.texture.key !== def.sheet || this.ghost.frame.name !== def.texture) {
+      const texture = this.textures.get(def.sheet);
+      if (texture && texture.has(def.texture)) {
+        this.ghost.setTexture(def.sheet, def.texture);
+      } else {
+        this.ghost.setTexture("placeholder");
+      }
+    }
+    this.ghost.setTint(ok ? GHOST_OK : GHOST_BAD);
+    this.ghost.setAlpha(0.6);
+
+    this.ghostOutline.setPosition(pos.x, pos.y);
+    this.ghostOutline.setTexture(ok ? "ghost-ok" : "ghost-bad");
+    this.setGhostVisible(true);
+  }
+
+  // ------------------------------------------------------------------
+  // Bus wiring + simulation loop
+  // ------------------------------------------------------------------
+
+  private wireBus(): void {
+    this.unsubs.push(
+      bus.on("build:select", (kind) => {
+        this.selectedKind = kind;
+        this.drawBuildGrid();
+        this.updateGhost();
+      }),
+      bus.on("sim:restart", () => this.restartRun()),
+    );
+    // Always clean up listeners + timers on scene teardown (HMR/navigation).
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.unsubs.forEach((u) => u());
+      this.unsubs = [];
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.fitCamera, this);
+      this.tickTimer?.remove();
+      this.tickTimer = undefined;
+    });
+  }
+
+  private createTickTimer(): Phaser.Time.TimerEvent {
+    return this.time.addEvent({
+      delay: TICK_MS,
+      loop: true,
+      callback: () => this.advance(),
+    });
+  }
+
+  private advance(): void {
+    const next = tick(this.state);
+    const justDied = next.gameOver && !this.state.gameOver;
+    this.state = next;
+    if (justDied) {
+      // Freeze the simulation on death; the React modal drives restart.
+      this.tickTimer?.remove();
+      this.tickTimer = undefined;
+      this.setGhostVisible(false);
+      bus.emit("sim:gameover", next);
+    }
+    bus.emit("sim:update", this.state);
+  }
+
+  private restartRun(): void {
+    this.buildingSprites.forEach((img) => img.destroy());
+    this.buildingSprites.clear();
+    this.decorSprites.forEach((img) => img.destroy());
+    this.decorSprites.clear();
+    this.state = createInitialState();
+    this.selectedKind = null;
+    bus.emit("build:select", null);
+    this.hovered = null;
+    this.setGhostVisible(false);
+    this.renderDecor();
+    this.drawBuildGrid();
+    if (!this.tickTimer) this.tickTimer = this.createTickTimer();
+    bus.emit("sim:update", this.state);
+  }
+
+  // ------------------------------------------------------------------
+  // Static iso math (shared, pure)
+  // ------------------------------------------------------------------
+
+  private static isoToWorld(col: number, row: number): Phaser.Math.Vector2 {
+    return new Phaser.Math.Vector2(
+      (col - row) * ISO.HALF_W,
+      (col + row) * ISO.HALF_H,
+    );
+  }
+}
