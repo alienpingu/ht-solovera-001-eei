@@ -15,6 +15,19 @@ import type { BuildingKind } from "@/game/data/tiles";
  * them with a spatial diffusion model without touching this interface.
  */
 
+/**
+ * A building footprint is a rectangle of grid cells. Every occupied cell holds
+ * the SAME record, whose row/col are the ANCHOR (the cell the player tapped,
+ * the footprint center). Storing the anchor on each cell lets tick() count a
+ * building exactly once (only at its anchor cell) and lets a demolish tap on
+ * any footprint cell resolve the full rectangle to clear.
+ */
+export interface GridCell {
+  kind: BuildingKind;
+  row: number;
+  col: number;
+}
+
 export interface SimState {
   /** Elapsed ticks; the survival score. */
   tick: number;
@@ -26,7 +39,7 @@ export interface SimState {
   pollution: number;
   gameOver: boolean;
   /** Building grid, row-major. null = empty cell. */
-  grid: (BuildingKind | null)[][];
+  grid: (GridCell | null)[][];
 }
 
 export const START_MONEY = 50;
@@ -47,18 +60,44 @@ export function createInitialState(): SimState {
     pollution: 0,
     gameOver: false,
     grid: Array.from({ length: GRID_H }, () =>
-      Array<BuildingKind | null>(GRID_W).fill(null),
+      Array<GridCell | null>(GRID_W).fill(null),
     ),
   };
 }
 
-/** Shallow clone of state with a copied grid — the grid is tiny (<=144 cells). */
+/** Shallow clone of state with a copied grid — the grid is tiny (<=900 cells). */
 function clone(state: SimState): SimState {
   return { ...state, grid: state.grid.map((row) => row.slice()) };
 }
 
+/**
+ * Cells covered by a building anchored at (row, col). The anchor is the
+ * footprint CENTER: it extends rowBack..rowFront rows up/down and
+ * colBack..colFront columns left/right, so a 4x2 house centered on a cell
+ * covers 2 columns to its right and 1 to its left. The front-most cell (max
+ * row+col) is what the renderer depth-sorts against.
+ */
+export function footprintCells(
+  row: number,
+  col: number,
+  kind: BuildingKind,
+): { row: number; col: number; rowFront: number; colFront: number }[] {
+  const def = BUILDING_DEFS[kind];
+  const rowBack = Math.floor((def.footH - 1) / 2);
+  const rowFront = Math.floor(def.footH / 2);
+  const colBack = Math.floor((def.footW - 1) / 2);
+  const colFront = Math.floor(def.footW / 2);
+  const cells: { row: number; col: number; rowFront: number; colFront: number }[] = [];
+  for (let r = row - rowBack; r <= row + rowFront; r++) {
+    for (let c = col - colBack; c <= col + colFront; c++) {
+      cells.push({ row: r, col: c, rowFront, colFront });
+    }
+  }
+  return cells;
+}
+
 export function cellKind(state: SimState, row: number, col: number): BuildingKind | null {
-  return state.grid[row][col];
+  return state.grid[row][col]?.kind ?? null;
 }
 
 export function canAfford(state: SimState, kind: BuildingKind): boolean {
@@ -66,17 +105,24 @@ export function canAfford(state: SimState, kind: BuildingKind): boolean {
 }
 
 /**
- * Validate that a cell may host a new building. Location checks only;
- * affordability is the caller's concern (kept separate so the UI can grey
- * out buttons instead of failing taps).
+ * Validate that a building of `kind` may be placed with its anchor on
+ * (row, col). Location checks only; affordability is the caller's concern
+ * (kept separate so the UI can grey out buttons instead of failing taps).
  */
-export function canBuild(state: SimState, row: number, col: number): ActionResult {
-  if (row < 0 || row >= GRID_H || col < 0 || col >= GRID_W) {
-    return { ok: false, reason: "Off the island" };
-  }
-  if (!isLand(row, col)) return { ok: false, reason: "Can't build on water" };
-  if (state.grid[row][col]) return { ok: false, reason: "Tile already occupied" };
+export function canBuild(
+  state: SimState,
+  row: number,
+  col: number,
+  kind: BuildingKind,
+): ActionResult {
   if (state.gameOver) return { ok: false, reason: "The island has fallen" };
+  for (const cell of footprintCells(row, col, kind)) {
+    if (cell.row < 0 || cell.row >= GRID_H || cell.col < 0 || cell.col >= GRID_W) {
+      return { ok: false, reason: "Building would hang off the island" };
+    }
+    if (!isLand(cell.row, cell.col)) return { ok: false, reason: "Can't build on water" };
+    if (state.grid[cell.row][cell.col]) return { ok: false, reason: "Tile already occupied" };
+  }
   return { ok: true, state };
 }
 
@@ -86,24 +132,28 @@ export function placeBuilding(
   col: number,
   kind: BuildingKind,
 ): ActionResult {
-  const spot = canBuild(state, row, col);
+  const spot = canBuild(state, row, col, kind);
   if (!spot.ok) return spot;
   const def = BUILDING_DEFS[kind];
   if (state.money < def.cost) return { ok: false, reason: `Need $${def.cost}` };
 
   const next = clone(state);
-  next.grid[row][col] = kind;
+  for (const cell of footprintCells(row, col, kind)) {
+    next.grid[cell.row][cell.col] = { kind, row, col };
+  }
   next.money -= def.cost;
   return { ok: true, state: next };
 }
 
 export function removeBuilding(state: SimState, row: number, col: number): ActionResult {
-  const kind = state.grid[row][col];
-  if (!kind) return { ok: false, reason: "Nothing to demolish here" };
+  const cell = state.grid[row][col];
+  if (!cell) return { ok: false, reason: "Nothing to demolish here" };
 
   const next = clone(state);
-  next.grid[row][col] = null;
-  next.money += Math.floor(BUILDING_DEFS[kind].cost * BUILDING_DEFS[kind].refundRatio);
+  for (const fc of footprintCells(cell.row, cell.col, cell.kind)) {
+    next.grid[fc.row][fc.col] = null;
+  }
+  next.money += Math.floor(BUILDING_DEFS[cell.kind].cost * BUILDING_DEFS[cell.kind].refundRatio);
   return { ok: true, state: next };
 }
 
@@ -114,7 +164,10 @@ function clamp(v: number, min: number, max: number): number {
 /**
  * Advance the simulation one tick. Pure: returns a new state, never mutates
  * the argument. Order matters and is deliberate:
- *   1. sum income + pollution from every building on the grid
+ *   1. sum income + pollution from every building on the grid (each building
+ *      counted ONCE, at its anchor cell — a multi-tile footprint shares one
+ *      anchor record, so without the anchor guard a 4x3 extractor would bill
+ *      12x its income/pollution)
  *   2. apply money, clamp pollution to [0,100]
  *   3. health is a derived quantity (100 - pollution)
  *   4. population grows only while the island is healthy enough
@@ -127,10 +180,10 @@ export function tick(state: SimState): SimState {
   let pollution = 0;
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
-      const kind = state.grid[r][c];
-      if (!kind) continue;
-      income += BUILDING_DEFS[kind].income;
-      pollution += BUILDING_DEFS[kind].pollution;
+      const cell = state.grid[r][c];
+      if (!cell || cell.row !== r || cell.col !== c) continue;
+      income += BUILDING_DEFS[cell.kind].income;
+      pollution += BUILDING_DEFS[cell.kind].pollution;
     }
   }
 
@@ -144,8 +197,8 @@ export function tick(state: SimState): SimState {
   let popDelta = 0;
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
-      const kind = next.grid[r][c];
-      if (kind !== "house") continue;
+      const cell = next.grid[r][c];
+      if (!cell || cell.kind !== "house" || cell.row !== r || cell.col !== c) continue;
       const def = BUILDING_DEFS.house;
       popDelta += next.health >= def.popNeedHealth ? def.popGrowth : -def.popGrowth;
     }

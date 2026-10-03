@@ -1,5 +1,18 @@
 import Phaser from "phaser";
-import { ISO, BUILDING_DEFS } from "@/game/data/tiles";
+import { ISO, BUILDING_DEFS, BUILDING_ORDER } from "@/game/data/tiles";
+import type { BuildingKind } from "@/game/data/tiles";
+
+/**
+ * OBJ cache key for a building kind. The raw Wavefront file is parsed by
+ * Phaser into the OBJ cache; the mesh is built from it by projectObj() in
+ * game/engine/isoMesh.ts (Phaser's own OBJ->mesh path can't reach the game's
+ * 2:1 iso projection). Only the OBJ is loaded — the Kenney MTL carries a
+ * white Kd + a map_Kd texture Phaser ignores, so the model is textured
+ * directly with its colormap PNG via the OBJ UVs.
+ */
+export const MODEL_OBJ_KEY = (kind: BuildingKind): string => `model:${kind}`;
+/** Texture cache key for a building's colormap atlas. */
+export const MODEL_TEX_KEY = (kind: BuildingKind): string => `model-tex:${kind}`;
 
 /**
  * BootScene: preload the Kenney isometric packs and bake the procedural
@@ -113,6 +126,23 @@ function validateAtlasFrames(scene: Phaser.Scene): void {
   }
 }
 
+/**
+ * Warn (once per bad def) when a model's OBJ or colormap texture is missing.
+ * The game falls back to the 2D atlas sprite in that case, so a typo here is
+ * a wrong-looking building, not a crash — but it deserves a loud console note.
+ */
+function validateModels(scene: Phaser.Scene): void {
+  for (const kind of BUILDING_ORDER) {
+    const def = BUILDING_DEFS[kind];
+    if (!scene.cache.obj.has(MODEL_OBJ_KEY(kind))) {
+      console.warn(`[assets] missing OBJ "${def.model.obj}" in models/${def.model.dir}`);
+    }
+    if (!scene.textures.exists(MODEL_TEX_KEY(kind))) {
+      console.warn(`[assets] missing texture "${def.model.tex}" in models/${def.model.dir}`);
+    }
+  }
+}
+
 export class BootScene extends Phaser.Scene {
   constructor() {
     super("BootScene");
@@ -134,12 +164,20 @@ export class BootScene extends Phaser.Scene {
       "/assets/kenney/isometric-buildings/buildingTiles_sheet.png",
       "/assets/kenney/isometric-buildings/buildingTiles_sheet.xml",
     );
+    // 3D building models + their per-model Kenney colormap atlases.
+    for (const kind of BUILDING_ORDER) {
+      const def = BUILDING_DEFS[kind];
+      const base = `/assets/models/${def.model.dir}`;
+      this.load.obj(MODEL_OBJ_KEY(kind), `${base}/${def.model.obj}`);
+      this.load.image(MODEL_TEX_KEY(kind), `${base}/${def.model.tex}`);
+    }
   }
 
   create(): void {
     makeGhostTextures(this);
     makePlaceholderTexture(this);
     validateAtlasFrames(this);
+    validateModels(this);
     this.scene.start("MainScene");
   }
 }

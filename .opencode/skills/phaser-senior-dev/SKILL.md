@@ -16,28 +16,34 @@ Phaser/React boundary clean, and the code readable.
   changes; this project deliberately pins 3.x. When adding/upgrading Phaser,
   install `phaser@3.90.0`, never `phaser` or `@4`.
 - Deploys statically on Vercel; no server APIs, no Edge runtime code.
-- Art is Kenney CC0. Both packs ("Isometric Tiles Landscape" and
-  "Isometric Tiles Buildings") are vendored as TexturePacker atlases under
+- Renderer is pinned to **WebGL** (`Phaser.WEBGL`, not AUTO): buildings are
+  Phaser **Mesh** game objects, which have no Canvas counterpart.
+- Ground/water art is Kenney CC0, vendored as TexturePacker atlases under
   `public/assets/kenney/`; licenses live beside them (`.../LICENSE.txt`) and
   the older per-file credit is in `public/assets/tiles/LICENSE.txt`.
+- Buildings are 3D Kenney models under `public/assets/models/<kind>/`
+  (`<model>.obj` + `colormap.png` + `<preview>.png` for the menu button). The
+  OBJ is triangulated Wavefront with UVs into its own `colormap.png`; the MTL
+  is ignored (Phaser can't load `map_Kd`, its `Kd` is white).
 
 ## File map
 
 | Path | Role |
 | --- | --- |
-| `game/config.ts` | Phaser.Game config: 900×640 design res, `Scale.FIT`, scenes |
+| `game/config.ts` | Phaser.Game config: 900×640 design res, `Scale.FIT`, WEBGL, scenes |
 | `game/events/bus.ts` | Typed `EventBus` — the ONLY Phaser⇄React channel |
-| `game/engine/simulation.ts` | Pure, deterministic sim: `SimState`, `tick()`, place/demolish |
-| `game/data/tiles.ts` | Iso constants, `TILE_FRAME` (ground art), `BUILDING_DEFS` (balance) |
-| `game/data/island.json` | Generated 10×10 water/grass grid (regenerate, don't hand-edit) |
-| `game/scenes/BootScene.ts` | Preloads the Kenney atlases, bakes ghost/placeholder textures |
-| `game/scenes/MainScene.ts` | Atlas-sprite ground + buildings, input, tick loop, owns authoritative `SimState` |
+| `game/engine/simulation.ts` | Pure, deterministic sim: `SimState`, `tick()`, place/demolish, multi-tile footprints |
+| `game/engine/isoMesh.ts` | Pure OBJ→iso-vertex projector (feeds `Mesh.addVertices`) |
+| `game/data/tiles.ts` | Iso constants, `TILE_FRAME` (ground art), `BUILDING_DEFS` (balance + footprints + model config) |
+| `game/data/island.json` | Generated 30×30 water/grass grid (regenerate, don't hand-edit) |
+| `game/scenes/BootScene.ts` | Preloads Kenney atlases + OBJ/colormap models, bakes ghost/placeholder textures |
+| `game/scenes/MainScene.ts` | Atlas-sprite ground + **Mesh** buildings, input, tick loop, owns authoritative `SimState` |
 | `game/scenes/TileInspectorScene.ts` | `/test` atlas frame inspector (tap a tile → frame id) |
 | `components/GameView.tsx` | Client shell; `next/dynamic` import of GameCanvas (`ssr:false`) |
 | `components/GameCanvas.tsx` | Phaser mount + `game.destroy(true)` on unmount |
 | `components/ui/*` | HUD, BuildingMenu, GameOverModal, `useGameBridge` hook |
 | `scripts/gen-island.mjs` | Deterministic island generator (edit this, then rerun) |
-| `scripts/sim-test.ts` | Sim sanity checks (19 asserts) |
+| `scripts/sim-test.ts` | Sim sanity checks (multi-tile placement, no double-count tick) |
 
 ## Architecture invariants (the rules that keep it from rotting)
 
@@ -55,10 +61,11 @@ Phaser/React boundary clean, and the code readable.
    and never mutate the argument. `MainScene` owns the single authoritative
    `SimState`; the UI snapshots it for display.
 4. **Single source of truth for balance**: costs/income/pollution/population
-   live in `BUILDING_DEFS` in `game/data/tiles.ts`. Textures are opaque string
-   keys resolved by `BootScene`, so logic never depends on art. Changing a
-   building touches: `BUILDING_DEFS` (+ optionally `BUILDING_ORDER`) in
-   `tiles.ts`, and the texture registration in `BootScene.preload`.
+   live in `BUILDING_DEFS` in `game/data/tiles.ts`. Textures/models are opaque
+   string keys resolved by `BootScene`, so logic never depends on art. Changing
+   a building touches: `BUILDING_DEFS` (+ optionally `BUILDING_ORDER`) in
+   `tiles.ts`, and (only for new asset files) the load lines in
+   `BootScene.preload`.
 
 ## Iso grid reference (measured from the art — don't guess)
 
@@ -73,13 +80,28 @@ Phaser/React boundary clean, and the code readable.
   vertex y=67); y=68..81 is the soil side, hidden by the tile in front. There is
   no tilemap and no baked sheet — and no separate decoration concept; every cell
   is the same kind of object.
-- Everything (ground tiles, buildings, ghost) is a sprite on one `Container`.
-  Ground depth is `(row+col)*2+1`, buildings `(row+col)*2+2`; **call
-  `container.sort("depth")` after adding** — Container children render in
-  insertion order and ignore per-child depth otherwise.
-- The whole map is one `Container`, fitted by the camera. Pointer→cell
-  conversion goes through `container.getLocalPoint()` then the inverse iso
-  transform, with a diamond-inside check to reject corner hits.
+- Everything (ground tiles, buildings, ghost) is one `Container`. Ground depth
+  is `(row+col)*2+1`; a building sorts by its **front-most footprint cell**:
+  `(row+rowFront+col+colFront)*2+2` (rowFront/colFront = half the footprint).
+  **Call `container.sort("depth")` after adding** — Container children render in
+  insertion order and ignore per-child depth otherwise. Meshes have a `depth`
+  property and sort like sprites; adding a Mesh to the container also registers
+  it on the update list so its `preUpdate` computes vertex transforms.
+- **Buildings are 3D Meshes.** `projectObj()` in `game/engine/isoMesh.ts`
+  transforms each OBJ's vertices with the game's own iso projection (Phaser's
+  `addVerticesFromObj` can't — its rotation maps one model axis horizontally),
+  and `MainScene.buildBuildingMesh` feeds the flat triangles to
+  `mesh.addVertices`. The mesh projection is kept 1:1 (one projected unit = one
+  world pixel) with `setOrtho(renderer.width, renderer.height)` **and**
+  `setSize(...)`, re-applied on every RESIZE (in `fitCamera`). Missing
+  model assets fall back to the 2D atlas sprite per kind.
+- **Footprints are rectangles.** A building's anchor cell is its footprint
+  CENTER; every occupied cell stores the same `{kind,row,col}` anchor record so
+  `tick()` counts a building once and a demolish tap on any footprint cell
+  resolves the whole rectangle. `canBuild(state,row,col,kind)` validates the
+  full footprint. The whole map is one `Container`, fitted by the camera.
+  Pointer→cell conversion goes through `container.getLocalPoint()` then the
+  inverse iso transform, with a diamond-inside check to reject corner hits.
 - Kenney ground/building PNGs are **132×83 / 133×127 etc. frames**. Ghost
   diamonds in `BootScene` copy the ground **top face** (frame y=1..67) and the
   ghost outline is anchored top-left to the ground frame, so it nests with the
@@ -130,9 +152,16 @@ npm run dev             # dev server (StrictMode double-mounts — GameCanvas mu
 
 - **Add a building kind**: extend `BuildingKind` + `BUILDING_DEFS` (and
   `BUILDING_ORDER` if it should appear in the menu) in `game/data/tiles.ts`.
-  `texture` is an atlas frame name already loaded (`buildingTiles_NNN.png` /
-  `landscapeTiles_NNN.png`), so no `BootScene` change is needed. Re-run
-  `sim-test.ts` if it has tick effects.
+  You must provide: `footW`/`footH` (tile footprint), a `model` config pointing
+  at OBJ + colormap + preview under `public/assets/models/<dir>/`, and the
+  sprite `sheet`/`texture` fallback. Add matching `load.obj` + `load.image`
+  lines in `BootScene.preload`. Re-run `sim-test.ts` if it has tick effects.
+- **Swap a model** (new OBJ/colormap): drop the files into the existing folder
+  (or a new one) and update `def.model.{dir,obj,tex}`. Recompute `scale` and
+  the center offsets from the new model's bounding box —
+  `scale = (footW+footH)/(xSpan+zSpan)`, `offsetX = -centerX`,
+  `offsetZ = -centerZ` — and eyeball `yawDeg`/`scale` in `npm run dev`. The
+  `preview` PNG drives the menu button.
 - **Rebalance**: only touch `BUILDING_DEFS` numbers. Keep pollution/house
   dynamics in the 0–100 `MAX_POLLUTION` range; health = 100 − pollution.
 - **Change the island shape**: edit `scripts/gen-island.mjs` (deterministic, no
@@ -150,13 +179,18 @@ npm run dev             # dev server (StrictMode double-mounts — GameCanvas mu
 
 ## Known constraints / trade-offs
 
-- Ground and buildings are both depth-sorted sprites on one container; no
+- Ground and buildings are both depth-sorted objects on one container; no
   tilemap, no baked sheet, no decoration layer. No camera panning — the island
-  fits via `Scale.FIT`.
+  fits via camera zoom (wheel/pinch/drag pan is supported).
 - Water is a real pale-aqua frame from the landscape pack (`landscapeTiles_066`,
-  the pack has no deep-blue ocean tile); grass is `landscapeTiles_000`
-  (verified by pixel analysis).
-- 1-cell footprints only; multi-tile buildings would need footprint arrays in
-  the engine + overlap depth handling.
+  the pack has no deep-blue ocean tile); grass is `landscapeTiles_067`.
+- Buildings are WebGL-only Phaser Meshes (textured from per-model Kenney
+  colormap PNGs via OBJ UVs); the MTL diffuse color is ignored and UV textures
+  (`map_Kd`) are not loadable by Phaser. The renderer is pinned to `Phaser.WEBGL`.
+- Footprints are axis-aligned rectangles with a center anchor (tree 1×1,
+  house 4×2, extractor 4×3). A footprint can't wrap the island edge or overlap
+  water/other buildings. Multi-height overlap (tall buildings behind short ones)
+  relies on front-most-cell depth sorting; extreme cases may need per-face depth
+  work.
 - Population/pollution are global meters, not spatially diffused — a diffusion
   model is the documented future refactor (interface already supports it).

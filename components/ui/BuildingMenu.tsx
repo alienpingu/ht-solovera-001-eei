@@ -8,37 +8,23 @@ import { useGameBridge } from "@/components/ui/useGameBridge";
 /**
  * Bottom action bar. Tapping a button selects a building kind (a ghost preview
  * appears on the island); tapping it again deselects and returns to
- * demolish-mode. Buttons are icon + short label and guaranteed >=48px tall /
- * >=48px wide for comfortable thumb targets. The longer effect description
- * lives in the aria-label + title instead of cluttering the button face.
+ * demolish-mode. Each button shows the model's 64x64 preview PNG plus a short
+ * label, and is guaranteed >=48px tall / >=48px wide for comfortable thumb
+ * targets. The longer effect description lives in the aria-label + title
+ * instead of cluttering the button face.
  */
 
 function BuildingIcon({ kind }: { kind: BuildingKind }) {
-  if (kind === "extractor") {
-    return (
-      <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
-        <path d="M12 2.5l2.4 1.4v2.8L12 8.1 9.6 6.7V3.9z" fill="#fca5a5" stroke="#991b1b" strokeWidth="1.2" />
-        <circle cx="12" cy="13" r="3" fill="#cbd5e1" stroke="#475569" strokeWidth="1.4" />
-        <g stroke="#94a3b8" strokeWidth="2" strokeLinecap="round">
-          <path d="M12 8.5v1.2M12 16.3v1.2M7.5 13h1.2M15.3 13h1.2M8.8 9.8l.9.9M14.3 14.3l.9.9M15.2 9.8l-.9.9M9.7 14.3l-.9.9" />
-        </g>
-      </svg>
-    );
-  }
-  if (kind === "house") {
-    return (
-      <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
-        <path d="M12 3.5L21 11h-2.5v9h-13v-9H3z" fill="#93c5fd" stroke="#1e40af" strokeWidth="1.4" strokeLinejoin="round" />
-        <rect x="10" y="14" width="4" height="6" fill="#1e3a8a" />
-      </svg>
-    );
-  }
   return (
-    <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
-      <rect x="10.5" y="14" width="3" height="7" fill="#92400e" />
-      <circle cx="12" cy="9" r="5.5" fill="#4ade80" stroke="#166534" strokeWidth="1.4" />
-      <circle cx="9.5" cy="8" r="1.6" fill="#22c55e" />
-    </svg>
+    // eslint-disable-next-line @next/next/no-img-element -- static CC0 preview, no optimizer needed
+    <img
+      src={BUILDING_DEFS[kind].model.preview}
+      alt=""
+      width={40}
+      height={40}
+      className="h-10 w-10 rounded-md bg-black/40 object-contain"
+      draggable={false}
+    />
   );
 }
 

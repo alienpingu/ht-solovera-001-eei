@@ -21,6 +21,9 @@ import {
   TICK_MS,
 } from "@/game/engine/simulation";
 import type { SimState } from "@/game/engine/simulation";
+import { projectObj } from "@/game/engine/isoMesh";
+import type { ParsedObjData } from "@/game/engine/isoMesh";
+import { MODEL_OBJ_KEY, MODEL_TEX_KEY } from "@/game/scenes/BootScene";
 import { bus } from "@/game/events/bus";
 
 const CELL_KEY = (row: number, col: number): string => `${row}:${col}`;
@@ -48,14 +51,21 @@ export class MainScene extends Phaser.Scene {
   private iso!: Phaser.GameObjects.Container;
   private state!: SimState;
 
-  /** Buildings placed on the grid, keyed by `${row}:${col}`. */
-  private buildingSprites = new Map<string, Phaser.GameObjects.Image>();
+  /** Buildings placed on the grid, keyed by `${row}:${col}` (anchor cell). */
+  private buildingSprites = new Map<string, Phaser.GameObjects.Image | Phaser.GameObjects.Mesh>();
 
   /** Translucent buildable/water overlay, drawn only while placing. */
   private gridGraphics!: Phaser.GameObjects.Graphics;
 
-  /** Ghost = the selected building frame (tinted) + a diamond outline. */
+  /**
+   * Ghost = the selected building (textured 3D mesh when the model loaded, else
+   * the atlas sprite) tinted by validity + a diamond outline. `ghostKind`
+   * tracks which model the ghost mesh was built from so it is only rebuilt on
+   * kind change (rebuilding clears all faces, which is wasteful per frame).
+   */
   private ghost!: Phaser.GameObjects.Image;
+  private ghostMesh: Phaser.GameObjects.Mesh | null = null;
+  private ghostKind: BuildingKind | null = null;
   private ghostOutline!: Phaser.GameObjects.Image;
   private hovered: { row: number; col: number } | null = null;
   private selectedKind: BuildingKind | null = null;
@@ -176,15 +186,70 @@ export class MainScene extends Phaser.Scene {
     return new Phaser.GameObjects.Image(this, 0, 0, "placeholder");
   }
 
+  /**
+   * Depth of a building on the iso stack. A footprint spans several cells, so
+   * it sorts by its FRONT-MOST cell (largest row+col): tiles strictly in front
+   * (higher row+col) draw over the building's base, and the building draws over
+   * its own footprint tiles and everything behind it.
+   */
+  private static buildingDepth(row: number, col: number, kind: BuildingKind): number {
+    const def = BUILDING_DEFS[kind];
+    const rowFront = Math.floor(def.footH / 2);
+    const colFront = Math.floor(def.footW / 2);
+    return (row + rowFront + col + colFront) * 2 + 2;
+  }
+
+  private modelReady(kind: BuildingKind): boolean {
+    return this.cache.obj.has(MODEL_OBJ_KEY(kind)) && this.textures.exists(MODEL_TEX_KEY(kind));
+  }
+
+  /**
+   * Build a textured 3D mesh for a building kind. The OBJ vertices are
+   * pre-projected into the iso grid plane by projectObj() (pure), then fed to
+   * addVertices as flat xyz triplets. The mesh must be added to the iso
+   * container afterwards (that registration also puts it on the update list so
+   * preUpdate computes its vertex transforms).
+   */
+  private buildBuildingMesh(kind: BuildingKind): Phaser.GameObjects.Mesh {
+    const def = BUILDING_DEFS[kind];
+    const mesh = new Phaser.GameObjects.Mesh(this, 0, 0, MODEL_TEX_KEY(kind));
+    const data = this.cache.obj.get(MODEL_OBJ_KEY(kind)) as unknown as ParsedObjData;
+    const { verts, uvs } = projectObj(data, def.model);
+    // projectObj's Y negation reflects face winding, so the default CCW
+    // culling would throw away the visible faces. Render all faces and let the
+    // per-face painter depth (Z in projectObj) sort them.
+    mesh.hideCCW = false;
+    mesh.addVertices(verts, uvs, undefined, true);
+    this.applyMeshProjection(mesh);
+    return mesh;
+  }
+
+  /**
+   * Keep the mesh's projection 1:1 (one projected unit = one world pixel).
+   * transformCoordinatesLocal maps NDC -> pixels using the mesh's OWN
+   * width/height, and the projection maps unit->NDC via setOrtho's scale, so
+   * both must track the current canvas size (they differ after a RESIZE).
+   */
+  private applyMeshProjection(mesh: Phaser.GameObjects.Mesh): void {
+    const renderer = this.sys.renderer as Phaser.Renderer.WebGL.WebGLRenderer;
+    mesh.setSize(renderer.width, renderer.height);
+    mesh.setOrtho(renderer.width, renderer.height);
+  }
+
   private addBuildingSprite(row: number, col: number, kind: BuildingKind): void {
     const def = BUILDING_DEFS[kind];
-    const img = this.makeSprite(def.sheet, def.texture);
-    this.iso.add(img);
-    img.setOrigin(0.5, 1);
     const pos = MainScene.isoToWorld(col, row);
-    img.setPosition(pos.x, pos.y);
-    img.setDepth((row + col) * 2 + 2);
-    this.buildingSprites.set(CELL_KEY(row, col), img);
+    let obj: Phaser.GameObjects.Image | Phaser.GameObjects.Mesh;
+    if (this.modelReady(kind)) {
+      obj = this.buildBuildingMesh(kind);
+    } else {
+      obj = this.makeSprite(def.sheet, def.texture);
+      obj.setOrigin(0.5, 1);
+    }
+    this.iso.add(obj);
+    obj.setPosition(pos.x, pos.y);
+    obj.setDepth(MainScene.buildingDepth(row, col, kind));
+    this.buildingSprites.set(CELL_KEY(row, col), obj);
     this.sortIso();
   }
 
@@ -269,6 +334,12 @@ export class MainScene extends Phaser.Scene {
     this.hasFitted = true;
     cam.centerOn((this.boundsMinX + this.boundsMaxX) / 2, (this.boundsMinY + this.boundsMaxY) / 2);
     this.clampCamera();
+    // Mesh projection maps vertex units 1:1 to world pixels by scaling against
+    // half the canvas size, so a RESIZE changes that ratio for every mesh.
+    this.buildingSprites.forEach((obj) => {
+      if (obj instanceof Phaser.GameObjects.Mesh) this.applyMeshProjection(obj);
+    });
+    if (this.ghostMesh) this.applyMeshProjection(this.ghostMesh);
     this.drawBuildGrid();
   }
 
@@ -506,6 +577,22 @@ export class MainScene extends Phaser.Scene {
   private setGhostVisible(visible: boolean): void {
     this.ghost.setVisible(visible);
     this.ghostOutline.setVisible(visible);
+    if (this.ghostMesh) this.ghostMesh.setVisible(visible);
+  }
+
+  /** Rebuild the ghost mesh when the selected kind changes (clear()+re-add is wasteful otherwise). */
+  private setGhostMeshFor(kind: BuildingKind | null): void {
+    if (this.ghostKind === kind) return;
+    this.ghostKind = kind;
+    if (this.ghostMesh) {
+      this.ghostMesh.destroy();
+      this.ghostMesh = null;
+    }
+    if (kind && this.modelReady(kind)) {
+      this.ghostMesh = this.buildBuildingMesh(kind);
+      this.ghostMesh.setAlpha(0.6).setDepth(1000);
+      this.iso.add(this.ghostMesh);
+    }
   }
 
   private updateGhost(): void {
@@ -516,26 +603,35 @@ export class MainScene extends Phaser.Scene {
       return;
     }
     const pos = MainScene.isoToWorld(cell.col, cell.row);
-    const ok = canBuild(this.state, cell.row, cell.col).ok && canAfford(this.state, kind);
+    const ok = canBuild(this.state, cell.row, cell.col, kind).ok && canAfford(this.state, kind);
+    const tint = ok ? GHOST_OK : GHOST_BAD;
     const def = BUILDING_DEFS[kind];
 
-    this.ghost.setPosition(pos.x, pos.y);
-    if (this.ghost.texture.key !== def.sheet || this.ghost.frame.name !== def.texture) {
-      const texture = this.textures.get(def.sheet);
-      if (texture && texture.has(def.texture)) {
-        this.ghost.setTexture(def.sheet, def.texture);
-      } else {
-        this.ghost.setTexture("placeholder");
+    if (this.ghostMesh) {
+      this.ghostMesh.setPosition(pos.x, pos.y);
+      this.ghostMesh.setTint(tint);
+      this.ghostMesh.setVisible(true);
+      this.ghost.setVisible(false);
+    } else {
+      this.ghost.setPosition(pos.x, pos.y);
+      if (this.ghost.texture.key !== def.sheet || this.ghost.frame.name !== def.texture) {
+        const texture = this.textures.get(def.sheet);
+        if (texture && texture.has(def.texture)) {
+          this.ghost.setTexture(def.sheet, def.texture);
+        } else {
+          this.ghost.setTexture("placeholder");
+        }
       }
+      this.ghost.setTint(tint);
+      this.ghost.setAlpha(0.6);
+      this.ghost.setVisible(true);
     }
-    this.ghost.setTint(ok ? GHOST_OK : GHOST_BAD);
-    this.ghost.setAlpha(0.6);
 
-    // Anchor the outline's frame to the cell: the ground top-face top vertex
-    // sits at frame y=1, so the frame top-left is (pos.x - HALF_W, pos.y - TILE_H - 1).
+    // Anchor the outline's frame to the anchor cell: the ground top-face top
+    // vertex sits at frame y=1, so the frame top-left is (pos.x - HALF_W, pos.y - TILE_H - 1).
     this.ghostOutline.setPosition(pos.x - ISO.HALF_W, pos.y - ISO.TILE_H - 1);
     this.ghostOutline.setTexture(ok ? "ghost-ok" : "ghost-bad");
-    this.setGhostVisible(true);
+    this.ghostOutline.setVisible(true);
   }
 
   // ------------------------------------------------------------------
@@ -546,6 +642,7 @@ export class MainScene extends Phaser.Scene {
     this.unsubs.push(
       bus.on("build:select", (kind) => {
         this.selectedKind = kind;
+        this.setGhostMeshFor(kind);
         this.drawBuildGrid();
         this.updateGhost();
       }),
@@ -584,8 +681,13 @@ export class MainScene extends Phaser.Scene {
   }
 
   private restartRun(): void {
-    this.buildingSprites.forEach((img) => img.destroy());
+    this.buildingSprites.forEach((obj) => obj.destroy());
     this.buildingSprites.clear();
+    if (this.ghostMesh) {
+      this.ghostMesh.destroy();
+      this.ghostMesh = null;
+    }
+    this.ghostKind = null;
     this.state = createInitialState();
     this.selectedKind = null;
     bus.emit("build:select", null);
