@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { ISO, BUILDING_DEFS, DECOR } from "@/game/data/tiles";
+import { ISO, BUILDING_DEFS } from "@/game/data/tiles";
 
 /**
  * BootScene: preload the Kenney isometric packs and bake the procedural
@@ -8,11 +8,11 @@ import { ISO, BUILDING_DEFS, DECOR } from "@/game/data/tiles";
  *
  * Both Kenney packs load as TexturePacker XML atlases, so every frame is
  * available by its sheet name (e.g. "landscapeTiles_005.png",
- * "buildingTiles_081.png"). The ground grid is rendered from a single uniform
- * tileset (ground-sheet.png) baked by scripts/build-kenney-sheets.mjs.
+ * "buildingTiles_081.png"). The ground is drawn straight from the landscape
+ * atlas by MainScene — there is no baked ground tileset.
  *
  * The ghost diamonds copy the ground art's 132x66 TOP FACE (frame y=1..67 of
- * an 83px frame) so they nest with the corrected ground layer.
+ * an 83px frame) so they nest with the ground sprites.
  */
 
 /**
@@ -21,7 +21,7 @@ import { ISO, BUILDING_DEFS, DECOR } from "@/game/data/tiles";
  * Each ground frame is a 132x83 block: the visible TOP FACE is a 132x66
  * diamond at frame y=1..67 (top vertex y=1, widest y=34, bottom vertex y=67),
  * and y=68..81 is the soil side. Ghost highlights copy the TOP FACE so they
- * nest with the ground layer (MainScene.renderGround anchors that top face to
+ * nest with the ground sprites (MainScene.renderTiles anchors that top face to
  * the game grid; the soil side is hidden by the tile in front).
  */
 const DIAMOND_FRAME_W = ISO.TILE_W; // 132
@@ -111,7 +111,6 @@ function validateAtlasFrames(scene: Phaser.Scene): void {
   for (const kind of Object.keys(BUILDING_DEFS) as (keyof typeof BUILDING_DEFS)[]) {
     check(BUILDING_DEFS[kind].sheet, BUILDING_DEFS[kind].texture);
   }
-  for (const d of DECOR) check("landscape", d.frame);
 }
 
 export class BootScene extends Phaser.Scene {
@@ -135,7 +134,6 @@ export class BootScene extends Phaser.Scene {
       "/assets/kenney/isometric-buildings/buildingTiles_sheet.png",
       "/assets/kenney/isometric-buildings/buildingTiles_sheet.xml",
     );
-    this.load.image("ground-sheet", "/assets/tiles/ground-sheet.png");
   }
 
   create(): void {

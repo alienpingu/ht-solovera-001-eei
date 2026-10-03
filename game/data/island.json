@@ -6,10 +6,10 @@
       "water",
       "water",
       "water",
-      "sand",
-      "sand",
-      "sand",
-      "sand",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
       "water",
       "water",
       "water"
@@ -17,152 +17,110 @@
     [
       "water",
       "water",
-      "sand",
-      "sand",
-      "grass3",
       "grass",
-      "sand",
-      "sand",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
       "water",
       "water"
     ],
     [
       "water",
-      "sand",
-      "sand",
-      "grass3",
-      "sand2",
-      "grass2",
-      "grass3",
-      "sand",
-      "sand",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
       "water"
     ],
     [
-      "sand",
-      "sand",
-      "grass3",
       "grass",
-      "grass2",
-      "grass3",
-      "sand2",
-      "grass2",
-      "sand",
-      "sand"
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass"
     ],
     [
-      "sand",
-      "grass3",
       "grass",
-      "grass2",
-      "grass3",
       "grass",
-      "grass2",
-      "grass3",
-      "sand2",
-      "sand"
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass"
     ],
     [
-      "sand",
       "grass",
-      "grass2",
-      "grass3",
       "grass",
-      "grass2",
-      "grass3",
       "grass",
-      "grass2",
-      "sand"
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass"
     ],
     [
-      "sand",
-      "sand",
-      "grass3",
       "grass",
-      "grass2",
-      "grass3",
       "grass",
-      "dirt",
-      "sand",
-      "sand"
-    ],
-    [
-      "water",
-      "sand",
-      "sand",
-      "sand2",
-      "grass3",
-      "dirt",
-      "grass2",
-      "sand",
-      "sand",
-      "water"
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass"
     ],
     [
       "water",
-      "water",
-      "sand",
-      "sand",
       "grass",
-      "sand2",
-      "sand",
-      "sand",
-      "water",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
       "water"
     ],
     [
       "water",
       "water",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
       "water",
-      "sand",
-      "sand",
-      "sand",
-      "sand",
+      "water"
+    ],
+    [
+      "water",
+      "water",
+      "water",
+      "grass",
+      "grass",
+      "grass",
+      "grass",
       "water",
       "water",
       "water"
     ]
-  ],
-  "decor": [
-    {
-      "row": 1,
-      "col": 5,
-      "frame": "landscapeTiles_017.png"
-    },
-    {
-      "row": 2,
-      "col": 1,
-      "frame": "landscapeTiles_080.png"
-    },
-    {
-      "row": 3,
-      "col": 6,
-      "frame": "landscapeTiles_080.png"
-    },
-    {
-      "row": 4,
-      "col": 2,
-      "frame": "landscapeTiles_017.png"
-    },
-    {
-      "row": 5,
-      "col": 7,
-      "frame": "landscapeTiles_008.png"
-    },
-    {
-      "row": 6,
-      "col": 3,
-      "frame": "landscapeTiles_005.png"
-    },
-    {
-      "row": 7,
-      "col": 8,
-      "frame": "landscapeTiles_087.png"
-    },
-    {
-      "row": 8,
-      "col": 4,
-      "frame": "landscapeTiles_012.png"
-    }
   ]
 }

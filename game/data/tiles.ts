@@ -1,34 +1,30 @@
 import island from "./island.json";
 
 /**
- * Pure game data layer: the baked island layout plus building definitions.
+ * Pure game data layer: the island layout plus building definitions.
  * This module MUST stay free of Phaser imports — it is shared by the
  * deterministic simulation engine (game/engine/simulation.ts) and the
  * renderer (scenes). Texture keys are opaque strings resolved only by
  * the BootScene, so swapping art never touches logic.
+ *
+ * There is no separate "decoration" concept: every cell is just a ground
+ * tile, and every tile is drawn the same way (an atlas sprite). A cell's
+ * kind only matters for buildability (water vs land).
  */
 
-export type GroundKind =
-  | "water"
-  | "sand"
-  | "sand2"
-  | "grass"
-  | "grass2"
-  | "grass3"
-  | "dirt";
+export type GroundKind = "water" | "grass";
 
 export const GRID_W = island.width;
 export const GRID_H = island.height;
 
-/** Pre-baked ground grid from game/data/island.json (row-major: [row][col]). */
+/** Island grid from game/data/island.json (row-major: [row][col]). */
 export const ISLAND: GroundKind[][] = island.tiles as GroundKind[][];
 
-/** Pre-baked decorative scatter from game/data/island.json (render-only). */
-export const DECOR: { row: number; col: number; frame: string }[] = island.decor as {
-  row: number;
-  col: number;
-  frame: string;
-}[];
+/** Ground kind -> landscape atlas frame. Swapping art happens only here. */
+export const TILE_FRAME: Record<GroundKind, string> = {
+  water: "landscapeTiles_066.png",
+  grass: "landscapeTiles_067.png",
+};
 
 /**
  * Iso diamond geometry, in pixels.
@@ -47,9 +43,13 @@ export const ISO = {
   HALF_H: 33,
 } as const;
 
-export function groundAt(row: number, col: number): GroundKind {
-  return ISLAND[row][col];
-}
+/**
+ * Ground sprites anchor at the TOP FACE's bottom vertex (frame y=67 of an
+ * 83px frame), not the frame bottom — that lands the visible 132x66 diamond
+ * exactly on the cell, matching how the old iso tilemap placed it. So origin
+ * y = 67/83. Objects (buildings) keep origin (0.5, 1).
+ */
+export const GROUND_ORIGIN_Y = 67 / 83;
 
 /** Only non-water terrain is buildable. */
 export function isLand(row: number, col: number): boolean {
@@ -119,18 +119,3 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
 
 /** UI order for the build menu. */
 export const BUILDING_ORDER: BuildingKind[] = ["extractor", "house", "eco"];
-
-/**
- * Ground kind -> tile index in the baked uniform tileset
- * (public/assets/tiles/ground-sheet.png). The sheet order is produced by
- * scripts/build-kenney-sheets.mjs — keep the two in lockstep.
- */
-export const GROUND_SHEET_INDEX: Record<GroundKind, number> = {
-  water: 0,
-  sand: 1,
-  sand2: 2,
-  grass: 3,
-  grass2: 4,
-  grass3: 5,
-  dirt: 6,
-};

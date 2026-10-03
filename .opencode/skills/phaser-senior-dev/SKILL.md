@@ -28,15 +28,15 @@ Phaser/React boundary clean, and the code readable.
 | `game/config.ts` | Phaser.Game config: 900×640 design res, `Scale.FIT`, scenes |
 | `game/events/bus.ts` | Typed `EventBus` — the ONLY Phaser⇄React channel |
 | `game/engine/simulation.ts` | Pure, deterministic sim: `SimState`, `tick()`, place/demolish |
-| `game/data/tiles.ts` | Iso constants, `GROUND_SHEET_INDEX`, `BUILDING_DEFS` (balance), `DECOR` |
-| `game/data/island.json` | Baked 10×10 ground grid + decor scatter (regenerate, don't hand-edit) |
-| `game/scenes/BootScene.ts` | Preloads the Kenney atlases + baked ground sheet, bakes ghost textures |
-| `game/scenes/MainScene.ts` | Iso tilemap ground + sprite objects, input, tick loop, owns authoritative `SimState` |
+| `game/data/tiles.ts` | Iso constants, `TILE_FRAME` (ground art), `BUILDING_DEFS` (balance) |
+| `game/data/island.json` | Generated 10×10 water/grass grid (regenerate, don't hand-edit) |
+| `game/scenes/BootScene.ts` | Preloads the Kenney atlases, bakes ghost/placeholder textures |
+| `game/scenes/MainScene.ts` | Atlas-sprite ground + buildings, input, tick loop, owns authoritative `SimState` |
+| `game/scenes/TileInspectorScene.ts` | `/test` atlas frame inspector (tap a tile → frame id) |
 | `components/GameView.tsx` | Client shell; `next/dynamic` import of GameCanvas (`ssr:false`) |
 | `components/GameCanvas.tsx` | Phaser mount + `game.destroy(true)` on unmount |
 | `components/ui/*` | HUD, BuildingMenu, GameOverModal, `useGameBridge` hook |
 | `scripts/gen-island.mjs` | Deterministic island generator (edit this, then rerun) |
-| `scripts/build-kenney-sheets.mjs` | Bakes the uniform ground tileset from the Kenney atlas |
 | `scripts/sim-test.ts` | Sim sanity checks (19 asserts) |
 
 ## Architecture invariants (the rules that keep it from rotting)
@@ -65,32 +65,26 @@ Phaser/React boundary clean, and the code readable.
 - `ISO = { TILE_W: 132, TILE_H: 66, HALF_W: 66, HALF_H: 33 }`.
 - World position of cell `(row, col)`: `x = (col - row) * HALF_W`,
   `y = (row + col) * HALF_H`. Object sprites anchor `(0.5, 1)` (bottom-center).
-- **Ground = a real Phaser iso Tilemap layer.** `renderGround()` flips a blank
-  map to `Orientation.ISOMETRIC`, adds the baked `ground-sheet` tileset
-  (`tileWidth=132`, frame height 83, `tileOffset=(0, 1)`) and `putTileAt`s each
-  cell. Each frame is a **132×83 block**: the visible TOP FACE is a 132×66
-  diamond at frame y=1..67 (top vertex y=1, widest y=34, bottom vertex y=67),
-  and y=68..81 is the soil side. Phaser puts a tile frame's top-left at
-  `(layer.x + pixelX - tileOffset.x, layer.y + pixelY - tileOffset.y)` with
-  `pixelX=(c-r)*66`, `pixelY=(c+r)*33`; the layer is positioned
-  `(-HALF_W, -TILE_H)` so that top face lands exactly on the game's 66px cell
-  diamond. Anchoring the soil bottom instead (the old `tileOffset.y=17`) shifts
-  the whole island half a tile right and 16px up relative to the grid/objects.
-  `skipCull = true` on the tiny map.
-- Objects (buildings, decor, ghost) stay **sprites on a scaled `Container`**:
-  their frames vary in height (trees 132×131, houses 133×127, machines 99×60)
-  so they don't fit a uniform tileset. Depth is `(row+col)*2+1`; **call
+- **Ground = one atlas sprite per cell.** `renderTiles()` places a landscape
+  frame (`TILE_FRAME[kind]`) at each cell, anchored at the TOP FACE's bottom
+  vertex (`GROUND_ORIGIN_Y = 67/83` of the 132×83 frame) so the visible 132×66
+  diamond lands exactly on the cell. Each frame is a **132×83 block**: the top
+  face is a 132×66 diamond at frame y=1..67 (top vertex y=1, widest y=34, bottom
+  vertex y=67); y=68..81 is the soil side, hidden by the tile in front. There is
+  no tilemap and no baked sheet — and no separate decoration concept; every cell
+  is the same kind of object.
+- Everything (ground tiles, buildings, ghost) is a sprite on one `Container`.
+  Ground depth is `(row+col)*2+1`, buildings `(row+col)*2+2`; **call
   `container.sort("depth")` after adding** — Container children render in
   insertion order and ignore per-child depth otherwise.
-- The whole map is one scaled `Container` + the scaled ground layer, fitted by
-  `fitMapToViewport()`. Pointer→cell conversion goes through
-  `container.getLocalPoint()` then the inverse iso transform, with a
-  diamond-inside check to reject corner hits.
+- The whole map is one `Container`, fitted by the camera. Pointer→cell
+  conversion goes through `container.getLocalPoint()` then the inverse iso
+  transform, with a diamond-inside check to reject corner hits.
 - Kenney ground/building PNGs are **132×83 / 133×127 etc. frames**. Ghost
   diamonds in `BootScene` copy the ground **top face** (frame y=1..67) and the
   ghost outline is anchored top-left to the ground frame, so it nests with the
-  corrected layer; the debug placeholder is bottom-anchored so it sits on a
-  cell like a real object.
+  ground sprites; the debug placeholder is bottom-anchored so it sits on a cell
+  like a real object.
 
 ## Event map
 
@@ -115,9 +109,7 @@ HUD re-renders. Restart is a bus event (no page reload).
 - No abstraction bloat: no needless interfaces/patterns; duplicate a 3-line
   loop before extracting a "utility". Keep it readable.
 - Shortcuts for hackathon speed must be tagged
-  `/* HACKATHON_TRADE_OFF: ... */` with the production refactor spelled out
-  (e.g. keeping building/decor as depth-sorted sprites instead of baking a
-  second uniform tileset with a y-offset for a buildings tilemap layer).
+  `/* HACKATHON_TRADE_OFF: ... */` with the production refactor spelled out.
 - The event bus stays `any`-free (tuple-style event map, see `bus.ts`).
 - Mobile/touch rules are already in place — preserve them: `touch-action:
   none` on the canvas root, tap-vs-drag 6px threshold, pointer-id guard for
@@ -131,7 +123,6 @@ npx tsc --noEmit        # typecheck
 npx eslint .            # lint
 npx tsx scripts/sim-test.ts    # sim sanity checks — run after any balance/engine change
 node scripts/gen-island.mjs    # regenerate game/data/island.json (edit generator, not JSON)
-node scripts/build-kenney-sheets.mjs  # rebake public/assets/tiles/ground-sheet.png from the atlas
 npm run dev             # dev server (StrictMode double-mounts — GameCanvas must survive it)
 ```
 
@@ -144,14 +135,13 @@ npm run dev             # dev server (StrictMode double-mounts — GameCanvas mu
   `sim-test.ts` if it has tick effects.
 - **Rebalance**: only touch `BUILDING_DEFS` numbers. Keep pollution/house
   dynamics in the 0–100 `MAX_POLLUTION` range; health = 100 − pollution.
-- **Change the island shape / decor**: edit `scripts/gen-island.mjs`
-  (deterministic, no RNG) and rerun it. Don't hand-edit `island.json`. Decor
-  is a render-only `[{ row, col, frame }]` list; buildings clear the decor on
-  their cell and demolish restores it.
-- **Add a ground kind**: pick a 132×83 ground frame from the landscape atlas,
-  add it to `GROUND_FRAMES` in `scripts/build-kenney-sheets.mjs` (keep the
-  order in sync with `GROUND_SHEET_INDEX` in `tiles.ts`), extend `GroundKind`,
-  rerun the bake, and update `gen-island.mjs`.
+- **Change the island shape**: edit `scripts/gen-island.mjs` (deterministic, no
+  RNG) and rerun it. Don't hand-edit `island.json`.
+- **Change the ground art**: point `TILE_FRAME` in `game/data/tiles.ts` at a
+  different landscape atlas frame. Ground frames must be 132×83 flat diamonds
+  (the visible top face is the 132×66 diamond at frame y=1..67) so
+  `GROUND_ORIGIN_Y = 67/83` keeps them on the grid. Use the `/test` inspector to
+  find frame ids.
 - **Add Kenney/free art**: both packs load as TexturePacker atlases, so any
   frame is available by sheet name with no preload edit. If you add a new
   pack, vendor the `Spritesheet/*.png` + `*.xml` and `load.atlas` it in
@@ -160,11 +150,12 @@ npm run dev             # dev server (StrictMode double-mounts — GameCanvas mu
 
 ## Known constraints / trade-offs
 
-- Ground is a Phaser iso Tilemap layer; objects (buildings/decor) are
-  depth-sorted sprites on a container. No camera panning — the island fits via
-  `Scale.FIT`.
-- Water is a real pale-aqua frame from the landscape pack (`landscape_044`);
-  the pack has no deep-blue ocean tile (verified by pixel analysis).
+- Ground and buildings are both depth-sorted sprites on one container; no
+  tilemap, no baked sheet, no decoration layer. No camera panning — the island
+  fits via `Scale.FIT`.
+- Water is a real pale-aqua frame from the landscape pack (`landscapeTiles_066`,
+  the pack has no deep-blue ocean tile); grass is `landscapeTiles_000`
+  (verified by pixel analysis).
 - 1-cell footprints only; multi-tile buildings would need footprint arrays in
   the engine + overlap depth handling.
 - Population/pollution are global meters, not spatially diffused — a diffusion

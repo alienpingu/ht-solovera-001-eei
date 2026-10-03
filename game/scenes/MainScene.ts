@@ -4,8 +4,8 @@ import {
   GRID_W,
   GRID_H,
   ISLAND,
-  DECOR,
-  GROUND_SHEET_INDEX,
+  TILE_FRAME,
+  GROUND_ORIGIN_Y,
   BUILDING_DEFS,
   isLand,
 } from "@/game/data/tiles";
@@ -29,15 +29,15 @@ const GHOST_OK = 0x3ddc84;
 const GHOST_BAD = 0xff5a5a;
 
 /**
- * MainScene: renders the baked iso island, owns the authoritative SimState,
- * and turns taps/drags into building/demolish actions forwarded to the pure
+ * MainScene: renders the iso island, owns the authoritative SimState, and
+ * turns taps/drags into building/demolish actions forwarded to the pure
  * engine.
  *
- * The ground grid is a real Phaser iso Tilemap layer fed by the uniform
- * tileset baked in build-kenney-sheets.mjs. Buildings and decorative scatter
- * are sprites on a container: their frames vary in height (trees, houses,
- * machines) so they don't fit a uniform tileset cleanly, and per-sprite depth
- * ((row+col)*2+1) keeps the iso overlap exact.
+ * The ground is one atlas sprite per cell (no tilemap, no baked sheet, no
+ * separate decoration list): every cell is drawn the same way and depth-sorted
+ * by (row+col) so the tile in front covers the soil side of the tile behind.
+ * Buildings are sprites on the same container, one depth step above the ground
+ * on their cell.
  *
  * The container stays at scale 1 and the CAMERA does all the fitting/zooming,
  * which is what lets portrait phones go edge-to-edge and lets two-finger
@@ -49,9 +49,6 @@ export class MainScene extends Phaser.Scene {
 
   /** Buildings placed on the grid, keyed by `${row}:${col}`. */
   private buildingSprites = new Map<string, Phaser.GameObjects.Image>();
-
-  /** Decorative scatter from island.json, same keying as buildings. */
-  private decorSprites = new Map<string, Phaser.GameObjects.Image>();
 
   /** Translucent buildable/water overlay, drawn only while placing. */
   private gridGraphics!: Phaser.GameObjects.Graphics;
@@ -97,16 +94,14 @@ export class MainScene extends Phaser.Scene {
 
   create(): void {
     this.state = createInitialState();
-    // Ground first (separate display object below the container).
-    this.renderGround();
     this.iso = this.add.container(0, 0);
 
-    // Build overlay sits under every object (objects are depth >= 1).
+    // Build overlay sits under every tile (tiles are depth >= 1).
     this.gridGraphics = this.add.graphics();
     this.gridGraphics.setDepth(0);
     this.iso.add(this.gridGraphics);
 
-    this.renderDecor();
+    this.renderTiles();
 
     // Ghost building sprite + the diamond outline that nests with the ground.
     // The outline is drawn in the ground frame's own space (diamond at frame
@@ -136,57 +131,26 @@ export class MainScene extends Phaser.Scene {
   // ------------------------------------------------------------------
 
   /**
-   * Build the ground as an isometric Tilemap layer. Phaser defaults a blank
-   * map to orthographic, so flip the orientation first.
-   *
-   * The baked tileset frames are 132x83 blocks: the visible TOP FACE is a
-   * 132x66 diamond at frame y=1..67, and y=68..81 is the soil side (measured
-   * by pixel analysis). Phaser places a tile frame's top-left at
-   * (layer.x + pixelX - tileOffset.x, layer.y + pixelY - tileOffset.y), with
-   * pixelX=(c-r)*66, pixelY=(c+r)*33. We want that top face to land on the
-   * game's 66-tall cell diamond, so:
-   *   frameTop  = (c+r)*33 - 67  =>  layer.y(-66) - tileOffset.y(1)
-   *   frameLeft = (c-r)*66 - 66  =>  layer.x(-66)
-   * tileOffset.y=1 (not the art's 17px soil depth) is what anchors the TOP
-   * FACE to the grid; anchoring the soil bottom instead shifts the whole
-   * island half a tile right and 16px up relative to the grid/objects.
+   * Draw the ground as one atlas sprite per cell. There is no tilemap and no
+   * baked sheet: ground and what used to be "decoration" are the same kind of
+   * object, so they share one code path. Sprites live on the iso container and
+   * are depth-sorted by (row+col) so the tile in front covers the soil side of
+   * the tile behind.
    */
-  private renderGround(): void {
-    const map = this.add.tilemap(undefined, ISO.TILE_W, ISO.TILE_H, GRID_W, GRID_H);
-    // Phaser typings call this a string but the renderer switches on the
-    // numeric orientation enum — cast the enum value through.
-    map.orientation = Phaser.Tilemaps.Orientation.ISOMETRIC as unknown as string;
-    const tileset = map.addTilesetImage(
-      "ground-sheet",
-      "ground-sheet",
-      ISO.TILE_W,
-      ISO.TILE_H + 17,
-      0,
-      0,
-      undefined,
-      new Phaser.Math.Vector2(0, 1),
-    );
-    if (!tileset) throw new Error("missing ground-sheet tileset");
-    const layer = map.createBlankLayer(
-      "ground",
-      tileset,
-      0,
-      0,
-      GRID_W,
-      GRID_H,
-      ISO.TILE_W,
-      ISO.TILE_H,
-    );
-    if (!layer) throw new Error("failed to create ground layer");
-    layer.skipCull = true; // 10x10 map — iso culling is pure overhead here
+  private renderTiles(): void {
     for (let r = 0; r < GRID_H; r++) {
       for (let c = 0; c < GRID_W; c++) {
-        layer.putTileAt(GROUND_SHEET_INDEX[ISLAND[r][c]], c, r);
+        const img = this.makeSprite("landscape", TILE_FRAME[ISLAND[r][c]]);
+        // Anchor the visible top face (frame y=67 of the 83px frame) to the
+        // cell diamond, not the frame's soil bottom.
+        img.setOrigin(0.5, GROUND_ORIGIN_Y);
+        const pos = MainScene.isoToWorld(c, r);
+        img.setPosition(pos.x, pos.y);
+        img.setDepth((r + c) * 2 + 1);
+        this.iso.add(img);
       }
     }
-    // Shift the layer so its 132x83 frame top-left matches the game grid's
-    // cell (0,0) diamond (see the derivation above).
-    layer.setPosition(-ISO.HALF_W, -ISO.TILE_H);
+    this.sortIso();
   }
 
   /**
@@ -202,38 +166,6 @@ export class MainScene extends Phaser.Scene {
     return new Phaser.GameObjects.Image(this, 0, 0, "placeholder");
   }
 
-  private addDecorSprite(d: { row: number; col: number; frame: string }): void {
-    const img = this.makeSprite("landscape", d.frame);
-    this.iso.add(img);
-    img.setOrigin(0.5, 1);
-    const pos = MainScene.isoToWorld(d.col, d.row);
-    img.setPosition(pos.x, pos.y);
-    // Same depth band as buildings so a bush/tree in front still overlaps a
-    // building behind it (row+col orders front-to-back).
-    img.setDepth((d.row + d.col) * 2 + 1);
-    this.decorSprites.set(CELL_KEY(d.row, d.col), img);
-    this.sortIso();
-  }
-
-  private removeDecorAt(row: number, col: number): void {
-    const img = this.decorSprites.get(CELL_KEY(row, col));
-    if (img) {
-      img.destroy();
-      this.decorSprites.delete(CELL_KEY(row, col));
-    }
-  }
-
-  /** Restore the baked decor for a cell after its building was demolished. */
-  private restoreDecorAt(row: number, col: number): void {
-    if (this.decorSprites.has(CELL_KEY(row, col))) return;
-    const d = DECOR.find((x) => x.row === row && x.col === col);
-    if (d) this.addDecorSprite(d);
-  }
-
-  private renderDecor(): void {
-    for (const d of DECOR) this.addDecorSprite(d);
-  }
-
   private addBuildingSprite(row: number, col: number, kind: BuildingKind): void {
     const def = BUILDING_DEFS[kind];
     const img = this.makeSprite(def.sheet, def.texture);
@@ -241,7 +173,7 @@ export class MainScene extends Phaser.Scene {
     img.setOrigin(0.5, 1);
     const pos = MainScene.isoToWorld(col, row);
     img.setPosition(pos.x, pos.y);
-    img.setDepth((row + col) * 2 + 1);
+    img.setDepth((row + col) * 2 + 2);
     this.buildingSprites.set(CELL_KEY(row, col), img);
     this.sortIso();
   }
@@ -249,7 +181,7 @@ export class MainScene extends Phaser.Scene {
   /**
    * Container children render in insertion order — per-child `depth` is not
    * applied automatically — so sort explicitly to keep iso front/back
-   * overlap correct as buildings/decor are added.
+   * overlap correct as tiles/buildings are added.
    */
   private sortIso(): void {
     this.iso.sort("depth");
@@ -460,8 +392,6 @@ export class MainScene extends Phaser.Scene {
     const res = placeBuilding(this.state, row, col, kind);
     if (res.ok) {
       this.state = res.state;
-      // A building takes over its cell, so clear any baked decor on it.
-      this.removeDecorAt(row, col);
       this.addBuildingSprite(row, col, kind);
       bus.emit("build:placed", { row, col, kind });
       bus.emit("sim:update", this.state);
@@ -479,7 +409,6 @@ export class MainScene extends Phaser.Scene {
     if (res.ok) {
       this.state = res.state;
       this.removeBuildingSprite(cell.row, cell.col);
-      this.restoreDecorAt(cell.row, cell.col);
       bus.emit("build:removed", { row: cell.row, col: cell.col });
       bus.emit("sim:update", this.state);
     } else {
@@ -516,9 +445,8 @@ export class MainScene extends Phaser.Scene {
     this.ghost.setTint(ok ? GHOST_OK : GHOST_BAD);
     this.ghost.setAlpha(0.6);
 
-    // Anchor the outline's frame to the same top-left the ground tilemap uses
-    // for this cell: frame top-left = (pos.x - HALF_W, pos.y - TILE_H - TOP_Y),
-    // where the ground top-face top vertex sits at frame y=1.
+    // Anchor the outline's frame to the cell: the ground top-face top vertex
+    // sits at frame y=1, so the frame top-left is (pos.x - HALF_W, pos.y - TILE_H - 1).
     this.ghostOutline.setPosition(pos.x - ISO.HALF_W, pos.y - ISO.TILE_H - 1);
     this.ghostOutline.setTexture(ok ? "ghost-ok" : "ghost-bad");
     this.setGhostVisible(true);
@@ -572,14 +500,11 @@ export class MainScene extends Phaser.Scene {
   private restartRun(): void {
     this.buildingSprites.forEach((img) => img.destroy());
     this.buildingSprites.clear();
-    this.decorSprites.forEach((img) => img.destroy());
-    this.decorSprites.clear();
     this.state = createInitialState();
     this.selectedKind = null;
     bus.emit("build:select", null);
     this.hovered = null;
     this.setGhostVisible(false);
-    this.renderDecor();
     this.drawBuildGrid();
     if (!this.tickTimer) this.tickTimer = this.createTickTimer();
     bus.emit("sim:update", this.state);
