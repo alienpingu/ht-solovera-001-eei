@@ -7,6 +7,7 @@ import {
   TILE_FRAME,
   GROUND_ORIGIN_Y,
   BUILDING_DEFS,
+  BUILDING_ORDER,
   isLand,
 } from "@/game/data/tiles";
 import type { BuildingKind } from "@/game/data/tiles";
@@ -61,9 +62,18 @@ export class MainScene extends Phaser.Scene {
 
   // Tap-vs-drag: a sloppy touch move shouldn't commit a demolish. In build
   // mode we intentionally allow drag-to-place, so the threshold only guards
-  // demolish taps. `downId` keeps us honest under multi-touch.
-  private downWorld = new Phaser.Math.Vector2();
+  // demolish taps. `downId` keeps us honest under multi-touch. Screen-space
+  // (`downScreen`) is deliberate: panning changes world coords mid-drag.
+  private downScreen = new Phaser.Math.Vector2();
   private downId = -1;
+  private downButton: "left" | "right" | "middle" = "left";
+
+  // Desktop pan. Left-drag pans when nothing is selected (otherwise it places);
+  // middle/right-drag pans in any mode. `panCapable` arms the gesture on
+  // pointerdown, `panning` latches once the 6px threshold is crossed.
+  private panLast = new Phaser.Math.Vector2();
+  private panCapable = false;
+  private panning = false;
 
   // Two-finger gestures. Screen-space (p.x/p.y) is deliberate: using world
   // coords would feed the camera's own scroll back into the pan and drift.
@@ -289,18 +299,33 @@ export class MainScene extends Phaser.Scene {
   // ------------------------------------------------------------------
 
   private wireInput(): void {
+    // Desktop: right-click cancels/deselects, so the browser menu only gets in
+    // the way. Suppress it on the canvas (touch is unaffected).
+    this.input.mouse?.disableContextMenu();
+
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
       this.activePointers.set(p.id, { x: p.x, y: p.y });
       if (this.activePointers.size >= 2) {
         // Second finger: cancel any pending placement, start a gesture.
         this.gestureActive = true;
         this.downId = -1;
+        this.panCapable = false;
+        this.panning = false;
         this.setGhostVisible(false);
         this.resetGestureBaseline();
         return;
       }
       this.downId = p.id;
-      this.downWorld.set(p.worldX, p.worldY);
+      this.downScreen.set(p.x, p.y);
+      this.panLast.set(p.x, p.y);
+      this.panning = false;
+      this.downButton = p.rightButtonDown() ? "right" : p.middleButtonDown() ? "middle" : "left";
+
+      // Right-click means "cancel" on desktop; middle/right-drag then pans.
+      if (this.downButton === "right") bus.emit("build:select", null);
+      this.panCapable =
+        this.downButton !== "left" || (!this.selectedKind && p.leftButtonDown());
+
       // Show the ghost immediately under the finger (touch has no hover).
       this.hovered = this.worldToCell(p.worldX, p.worldY);
       this.updateGhost();
@@ -313,6 +338,19 @@ export class MainScene extends Phaser.Scene {
       if (this.gestureActive && this.activePointers.size >= 2) {
         this.handleGesture();
         return;
+      }
+      if (this.panCapable && p.isDown && p.id === this.downId) {
+        const dx = p.x - this.panLast.x;
+        const dy = p.y - this.panLast.y;
+        if (!this.panning && Math.hypot(dx, dy) > 6) this.panning = true;
+        if (this.panning) {
+          const cam = this.cameras.main;
+          cam.scrollX -= dx / cam.zoom;
+          cam.scrollY -= dy / cam.zoom;
+          this.panLast.set(p.x, p.y);
+          this.clampCamera();
+          return;
+        }
       }
       // Mouse hover (or single-finger drag) moves the ghost.
       this.hovered = this.worldToCell(p.worldX, p.worldY);
@@ -328,17 +366,65 @@ export class MainScene extends Phaser.Scene {
       if (this.gestureActive || p.id !== this.downId) return;
       this.downId = -1;
 
+      const wasPan = this.panning;
+      this.panning = false;
+      this.panCapable = false;
+      if (wasPan) return;
+
       if (this.selectedKind) {
         // Drag-to-place: commit wherever the ghost last sat.
         if (this.hovered) this.commitAt(this.hovered.row, this.hovered.col);
-      } else {
-        const dx = p.worldX - this.downWorld.x;
-        const dy = p.worldY - this.downWorld.y;
+      } else if (this.downButton === "left") {
+        const dx = p.x - this.downScreen.x;
+        const dy = p.y - this.downScreen.y;
         if (Math.hypot(dx, dy) <= 6) this.handleDemolishTap(p.worldX, p.worldY);
       }
     };
     this.input.on("pointerup", endPointer);
     this.input.on("pointerupoutside", endPointer);
+
+    this.wireWheel();
+    this.wireKeys();
+  }
+
+  /**
+   * Desktop zoom: the scroll wheel zooms about the cursor (the world point under
+   * the pointer stays put), mirroring the mobile pinch. Clamped to the same
+   * fit-derived min/max as the camera, then clamped back onto the island.
+   */
+  private wireWheel(): void {
+    this.input.on(
+      "wheel",
+      (
+        pointer: Phaser.Input.Pointer,
+        _over: Phaser.GameObjects.GameObject[],
+        _dx: number,
+        deltaY: number,
+      ) => {
+        const cam = this.cameras.main;
+        const before = cam.getWorldPoint(pointer.x, pointer.y);
+        const factor = deltaY > 0 ? 0.9 : 1.1;
+        cam.setZoom(Phaser.Math.Clamp(cam.zoom * factor, this.minZoom, this.maxZoom));
+        const after = cam.getWorldPoint(pointer.x, pointer.y);
+        cam.scrollX += before.x - after.x;
+        cam.scrollY += before.y - after.y;
+        this.clampCamera();
+      },
+    );
+  }
+
+  /** Desktop selection shortcuts: 1/2/3 pick a building, Esc clears. */
+  private wireKeys(): void {
+    const keyboard = this.input.keyboard;
+    if (!keyboard) return;
+    const pick = (index: number): void => {
+      const kind = BUILDING_ORDER[index];
+      if (kind) bus.emit("build:select", this.selectedKind === kind ? null : kind);
+    };
+    keyboard.on("keydown-ONE", () => pick(0));
+    keyboard.on("keydown-TWO", () => pick(1));
+    keyboard.on("keydown-THREE", () => pick(2));
+    keyboard.on("keydown-ESC", () => bus.emit("build:select", null));
   }
 
   private resetGestureBaseline(): void {

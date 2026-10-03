@@ -84,8 +84,8 @@ export function BuildingMenu() {
         </div>
         <p className="mt-2 rounded-lg bg-black/50 px-2 py-1.5 text-center text-[11px] font-semibold text-white/85 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]">
           {selected
-            ? "Tap or drag on a tile to build — tap the button again to cancel"
-            : "Select a building, or tap a building to demolish it"}
+            ? "Click/tap or drag a tile to build — select again to cancel"
+            : "Select a building, or click/tap a building to demolish it"}
         </p>
       </div>
     </div>
