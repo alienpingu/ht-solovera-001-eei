@@ -77,6 +77,16 @@ export class MainScene extends Phaser.Scene {
 
   private minZoom = 0.2;
   private maxZoom = 3;
+  private hasFitted = false;
+
+  // Island extents in world units, recomputed on fit. Kept as fields so the
+  // pan/zoom gesture can clamp against them without touching camera.setBounds
+  // (Phaser's bounds clamp pins a zoomed-out view to the bounds' top-left
+  // instead of centering it, which pushed the island off the tap area).
+  private boundsMinX = 0;
+  private boundsMaxX = 0;
+  private boundsMinY = 0;
+  private boundsMaxY = 0;
 
   private tickTimer?: Phaser.Time.TimerEvent;
   private unsubs: (() => void)[] = [];
@@ -273,32 +283,62 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Fit the island with the CAMERA (zoom + bounds) rather than by scaling the
-   * container. Runs on every resize, so portrait/landscape both stay
-   * edge-to-edge. Bounds give us free pan clamping.
+   * Fit the island with the CAMERA (zoom + manual centering) rather than by
+   * scaling the container. Runs on every resize so portrait/landscape both
+   * stay edge-to-edge. We deliberately avoid `camera.setBounds`: Phaser's
+   * bounds clamp aligns a zoomed-out (view larger than map) camera to the
+   * bounds' TOP-LEFT rather than centering it, which on a tall portrait phone
+   * parked the island at the top of the screen and made centre taps miss.
    */
   private fitCamera(): void {
     const cam = this.cameras.main;
     const margin = ISO.TILE_H;
-    const minX = -(GRID_H - 1) * ISO.HALF_W - ISO.HALF_W;
-    const maxX = (GRID_W - 1) * ISO.HALF_W + ISO.HALF_W;
-    const minY = -ISO.TILE_H * 2; // headroom for tall trees above row 0
-    const maxY = (GRID_W - 1 + GRID_H - 1) * ISO.HALF_H + margin;
-    const mapW = maxX - minX;
-    const mapH = maxY - minY;
+    this.boundsMinX = -(GRID_H - 1) * ISO.HALF_W - ISO.HALF_W;
+    this.boundsMaxX = (GRID_W - 1) * ISO.HALF_W + ISO.HALF_W;
+    this.boundsMinY = -ISO.TILE_H * 2; // headroom for tall trees above row 0
+    this.boundsMaxY = (GRID_W - 1 + GRID_H - 1) * ISO.HALF_H + margin;
+    const mapW = this.boundsMaxX - this.boundsMinX;
+    const mapH = this.boundsMaxY - this.boundsMinY;
 
     const vw = this.scale.width;
     const vh = this.scale.height;
-    const PAD = 0.92; // breathing room around the island
-    const zoom = Math.min(vw / mapW, vh / mapH) * PAD;
-    this.minZoom = zoom * 0.6;
-    this.maxZoom = zoom * 3;
+    const PAD = 0.94; // breathing room around the island
+    const fit = Math.min(vw / mapW, vh / mapH) * PAD;
+    this.minZoom = fit * 0.6;
+    this.maxZoom = fit * 3;
 
-    cam.setBounds(minX, minY, mapW, mapH);
-    // Refit on every resize; the user can still pinch in/out afterwards.
-    cam.setZoom(Phaser.Math.Clamp(zoom, this.minZoom, this.maxZoom));
-    cam.centerOn((minX + maxX) / 2, (minY + maxY) / 2);
+    // First fit sets the zoom to show the whole island; later resizes keep the
+    // player's zoom (clamped) so mobile URL-bar show/hide doesn't fight them.
+    const zoom = this.hasFitted
+      ? Phaser.Math.Clamp(cam.zoom, this.minZoom, this.maxZoom)
+      : fit;
+    cam.setZoom(zoom);
+    this.hasFitted = true;
+    cam.centerOn((this.boundsMinX + this.boundsMaxX) / 2, (this.boundsMinY + this.boundsMaxY) / 2);
+    this.clampCamera();
     this.drawBuildGrid();
+  }
+
+  /**
+   * Keep the island on screen by clamping the camera's world centre. When the
+   * visible area is larger than the island on an axis (the portrait case), the
+   * island is centred on that axis instead of pinned to an edge.
+   */
+  private clampCamera(): void {
+    const cam = this.cameras.main;
+    const visW = cam.width / cam.zoom;
+    const visH = cam.height / cam.zoom;
+    // Phaser convention: world centre = scroll + half the SCREEN size.
+    const midX = cam.scrollX + cam.width / 2;
+    const midY = cam.scrollY + cam.height / 2;
+
+    const cxMin = this.boundsMinX + visW / 2;
+    const cxMax = this.boundsMaxX - visW / 2;
+    const cyMin = this.boundsMinY + visH / 2;
+    const cyMax = this.boundsMaxY - visH / 2;
+    const cx = cxMin > cxMax ? (this.boundsMinX + this.boundsMaxX) / 2 : Phaser.Math.Clamp(midX, cxMin, cxMax);
+    const cy = cyMin > cyMax ? (this.boundsMinY + this.boundsMaxY) / 2 : Phaser.Math.Clamp(midY, cyMin, cyMax);
+    cam.centerOn(cx, cy);
   }
 
   // ------------------------------------------------------------------
@@ -377,6 +417,7 @@ export class MainScene extends Phaser.Scene {
       cam.zoom = Phaser.Math.Clamp(cam.zoom * ratio, this.minZoom, this.maxZoom);
       cam.scrollX -= (midX - this.lastMid.x) / cam.zoom;
       cam.scrollY -= (midY - this.lastMid.y) / cam.zoom;
+      this.clampCamera();
     }
     this.lastPinchDist = dist;
     this.lastMid.set(midX, midY);

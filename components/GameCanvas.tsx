@@ -20,6 +20,11 @@ export default function GameCanvas() {
     const game = new Phaser.Game(GAME_CONFIG);
     gameRef.current = game;
 
+    // Dev-only handle for debugging input/camera from the console or DevTools.
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as { __solovra?: Phaser.Game }).__solovra = game;
+    }
+
     return () => {
       game.destroy(true);
       gameRef.current = null;

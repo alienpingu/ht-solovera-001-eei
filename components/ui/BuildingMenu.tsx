@@ -51,7 +51,7 @@ export function BuildingMenu() {
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="mx-auto max-w-xl rounded-2xl bg-black/65 p-3 shadow-lg backdrop-blur-sm">
+      <div className="pointer-events-auto mx-auto max-w-xl rounded-2xl bg-black/65 p-3 shadow-lg backdrop-blur-sm">
         <div className="grid grid-cols-3 gap-3">
           {BUILDING_ORDER.map((kind) => {
             const def = BUILDING_DEFS[kind];
