@@ -141,10 +141,10 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
     cost: 30,
     refundRatio: 0.5,
     income: 3,
-    pollution: 4,
+    pollution: 3,
     popGrowth: 0,
     popNeedHealth: 0,
-    desc: "+$3/tick, pollution +4",
+    desc: "+$3/tick, pollution +3",
   },
   house: {
     label: "House",
