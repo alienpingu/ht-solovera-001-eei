@@ -32,10 +32,10 @@ export const DECOR: { row: number; col: number; frame: string }[] = island.decor
 
 /**
  * Iso diamond geometry, in pixels.
- * Kenney's ground frames are 132x83 with the art bottom-anchored (measured
- * by pixel analysis: the ground art spans y=1..81, its bottom vertex 2px
- * above the frame's bottom edge). The iso grid uses the 2:1 diamond
- * (132 wide, 66 tall) that the art sits on.
+ * Kenney's ground frames are 132x83 blocks. The visible TOP FACE is a 132x66
+ * diamond at frame y=1..67 (top vertex y=1, widest y=34, bottom vertex y=67);
+ * y=68..81 is the soil side, hidden by the tile in front. The iso grid uses
+ * that 2:1 diamond (132 wide, 66 tall).
  * World position of a cell's diamond bottom-center:
  *   x = (col - row) * HALF_W
  *   y = (col + row) * HALF_H

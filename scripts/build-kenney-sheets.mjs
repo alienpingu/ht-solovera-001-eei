@@ -3,9 +3,11 @@
 // Extracts the ground-diamond frames out of the "Isometric Tiles Landscape"
 // spritesheet and repacks them into ONE uniform 132x83 tileset
 // (public/assets/tiles/ground-sheet.png). Phaser's iso Tilemap layer slices
-// it with tileWidth=132 / tileHeight=83 and nests it with tileOffset.y=15
-// (the measured y=15..81 diamond in each frame), so the ground grid stays
-// exactly on the game's 66px iso rows.
+// it with tileWidth=132 / tileHeight=83 and nests it with tileOffset.y=1: the
+// visible TOP FACE is a 132x66 diamond at frame y=1..67 (top vertex y=1,
+// widest y=34, bottom vertex y=67), and y=68..81 is the soil side. Anchoring
+// that top face (not the soil bottom) is what keeps the ground grid exactly
+// on the game's 66px iso rows.
 //
 // The landscape pack ships unlabeled landscapeTiles_000..127; the frame
 // indexes below were picked by pixel analysis (avg color + row-extent

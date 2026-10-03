@@ -109,8 +109,10 @@ export class MainScene extends Phaser.Scene {
     this.renderDecor();
 
     // Ghost building sprite + the diamond outline that nests with the ground.
+    // The outline is drawn in the ground frame's own space (diamond at frame
+    // y=1..67 of an 83px frame), so it is anchored top-left, not bottom-center.
     this.ghostOutline = new Phaser.GameObjects.Image(this, 0, 0, "ghost-ok");
-    this.ghostOutline.setOrigin(0.5, 1).setDepth(999).setVisible(false);
+    this.ghostOutline.setOrigin(0, 0).setDepth(999).setVisible(false);
     this.ghost = new Phaser.GameObjects.Image(this, 0, 0, "placeholder");
     this.ghost.setOrigin(0.5, 1).setDepth(1000).setVisible(false);
     this.iso.add(this.ghostOutline);
@@ -135,10 +137,19 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * Build the ground as an isometric Tilemap layer. Phaser defaults a blank
-   * map to orthographic, so flip the orientation first. The baked tileset
-   * frames are 132x83 whose ground art spans y=1..81 (measured by pixel
-   * analysis); tileOffset.y=17 replicates the old bottom-anchored sprite
-   * rendering exactly.
+   * map to orthographic, so flip the orientation first.
+   *
+   * The baked tileset frames are 132x83 blocks: the visible TOP FACE is a
+   * 132x66 diamond at frame y=1..67, and y=68..81 is the soil side (measured
+   * by pixel analysis). Phaser places a tile frame's top-left at
+   * (layer.x + pixelX - tileOffset.x, layer.y + pixelY - tileOffset.y), with
+   * pixelX=(c-r)*66, pixelY=(c+r)*33. We want that top face to land on the
+   * game's 66-tall cell diamond, so:
+   *   frameTop  = (c+r)*33 - 67  =>  layer.y(-66) - tileOffset.y(1)
+   *   frameLeft = (c-r)*66 - 66  =>  layer.x(-66)
+   * tileOffset.y=1 (not the art's 17px soil depth) is what anchors the TOP
+   * FACE to the grid; anchoring the soil bottom instead shifts the whole
+   * island half a tile right and 16px up relative to the grid/objects.
    */
   private renderGround(): void {
     const map = this.add.tilemap(undefined, ISO.TILE_W, ISO.TILE_H, GRID_W, GRID_H);
@@ -153,7 +164,7 @@ export class MainScene extends Phaser.Scene {
       0,
       0,
       undefined,
-      new Phaser.Math.Vector2(0, 17),
+      new Phaser.Math.Vector2(0, 1),
     );
     if (!tileset) throw new Error("missing ground-sheet tileset");
     const layer = map.createBlankLayer(
@@ -173,9 +184,9 @@ export class MainScene extends Phaser.Scene {
         layer.putTileAt(GROUND_SHEET_INDEX[ISLAND[r][c]], c, r);
       }
     }
-    // The layer's local origin is cell (0,0)'s TOP vertex; the container's is
-    // that cell's bottom vertex — one tile height apart.
-    layer.setPosition(0, -ISO.TILE_H);
+    // Shift the layer so its 132x83 frame top-left matches the game grid's
+    // cell (0,0) diamond (see the derivation above).
+    layer.setPosition(-ISO.HALF_W, -ISO.TILE_H);
   }
 
   /**
@@ -505,7 +516,10 @@ export class MainScene extends Phaser.Scene {
     this.ghost.setTint(ok ? GHOST_OK : GHOST_BAD);
     this.ghost.setAlpha(0.6);
 
-    this.ghostOutline.setPosition(pos.x, pos.y);
+    // Anchor the outline's frame to the same top-left the ground tilemap uses
+    // for this cell: frame top-left = (pos.x - HALF_W, pos.y - TILE_H - TOP_Y),
+    // where the ground top-face top vertex sits at frame y=1.
+    this.ghostOutline.setPosition(pos.x - ISO.HALF_W, pos.y - ISO.TILE_H - 1);
     this.ghostOutline.setTexture(ok ? "ghost-ok" : "ghost-bad");
     this.setGhostVisible(true);
   }

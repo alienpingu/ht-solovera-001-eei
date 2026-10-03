@@ -67,13 +67,16 @@ Phaser/React boundary clean, and the code readable.
   `y = (row + col) * HALF_H`. Object sprites anchor `(0.5, 1)` (bottom-center).
 - **Ground = a real Phaser iso Tilemap layer.** `renderGround()` flips a blank
   map to `Orientation.ISOMETRIC`, adds the baked `ground-sheet` tileset
-  (`tileWidth=132`, frame height 83, `tileOffset.y=17`) and `putTileAt`s each
-  cell. The offset replicates the old bottom-anchored sprite rendering: the
-  ground art spans y=1..81 (measured by pixel analysis; the earlier "y=15..81"
-  note was wrong), so its bottom vertex lands 2px above the cell's bottom
-  vertex and every tile overlaps the row behind uniformly. `skipCull = true`
-  on the tiny map; the layer is positioned `ISO.TILE_H * scale` above the
-  container because its origin is the cell's TOP vertex.
+  (`tileWidth=132`, frame height 83, `tileOffset=(0, 1)`) and `putTileAt`s each
+  cell. Each frame is a **132×83 block**: the visible TOP FACE is a 132×66
+  diamond at frame y=1..67 (top vertex y=1, widest y=34, bottom vertex y=67),
+  and y=68..81 is the soil side. Phaser puts a tile frame's top-left at
+  `(layer.x + pixelX - tileOffset.x, layer.y + pixelY - tileOffset.y)` with
+  `pixelX=(c-r)*66`, `pixelY=(c+r)*33`; the layer is positioned
+  `(-HALF_W, -TILE_H)` so that top face lands exactly on the game's 66px cell
+  diamond. Anchoring the soil bottom instead (the old `tileOffset.y=17`) shifts
+  the whole island half a tile right and 16px up relative to the grid/objects.
+  `skipCull = true` on the tiny map.
 - Objects (buildings, decor, ghost) stay **sprites on a scaled `Container`**:
   their frames vary in height (trees 132×131, houses 133×127, machines 99×60)
   so they don't fit a uniform tileset. Depth is `(row+col)*2+1`; **call
@@ -83,9 +86,11 @@ Phaser/React boundary clean, and the code readable.
   `fitMapToViewport()`. Pointer→cell conversion goes through
   `container.getLocalPoint()` then the inverse iso transform, with a
   diamond-inside check to reject corner hits.
-- Kenney ground/building PNGs are **132×83 / 133×127 etc. frames**; the ground
-  art is bottom-anchored (bottom vertex y=81). Ghost textures in `BootScene`
-  copy the measured y=1..81 geometry or they won't nest with the ground.
+- Kenney ground/building PNGs are **132×83 / 133×127 etc. frames**. Ghost
+  diamonds in `BootScene` copy the ground **top face** (frame y=1..67) and the
+  ghost outline is anchored top-left to the ground frame, so it nests with the
+  corrected layer; the debug placeholder is bottom-anchored so it sits on a
+  cell like a real object.
 
 ## Event map
 
