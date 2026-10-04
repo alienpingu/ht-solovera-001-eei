@@ -28,6 +28,22 @@ import { bus } from "@/game/events/bus";
 
 const CELL_KEY = (row: number, col: number): string => `${row}:${col}`;
 
+// The config seeds the canvas at 900×640 until the parent is measured (see
+// game/config.ts). Comparing against that seed tells a pre-measure fit from a
+// real one. We deliberately don't import GAME_WIDTH/HEIGHT here: config.ts
+// imports this scene, so a scene->config import would be a circular ESM
+// dependency whose consts aren't initialized yet.
+const SEED_W = 900;
+const SEED_H = 640;
+
+// Portrait camera default. The whole-island fit is width-constrained (the
+// island diamond is ~2:1), so on a tall phone the island shrinks to a thin
+// ~23%-height band with empty water above/below. Instead we zoom into the
+// island centre: fill this share of the viewport height while keeping at
+// least this share of the island's width on screen (the rest via pan/pinch).
+const PORTRAIT_FILL_H = 0.6;
+const PORTRAIT_MIN_WIDTH_VISIBLE = 0.5;
+
 /** Ghost tints: green = buildable + affordable, amber = affordable-locked, red = blocked. */
 const GHOST_OK = 0x3ddc84;
 const GHOST_BAD = 0xff5a5a;
@@ -178,8 +194,10 @@ export class MainScene extends Phaser.Scene {
     // A second extra pointer so two-finger pinch/pan always has input slots.
     this.input.addPointer(1);
 
-    this.fitCamera();
+    // Register the resize listener before the initial fit so a parent
+    // measurement landing during/just after create() is never missed.
     this.scale.on(Phaser.Scale.Events.RESIZE, this.fitCamera, this);
+    this.fitCamera();
     this.wireInput();
     this.wireBus();
     // The tick timer is NOT created here: the run stays paused (Day 0) until
@@ -467,11 +485,28 @@ export class MainScene extends Phaser.Scene {
     const vw = this.scale.width;
     const vh = this.scale.height;
     const PAD = 0.94; // breathing room around the island
-    const fit = Math.min(vw / mapW, vh / mapH) * PAD;
+    let fit = Math.min(vw / mapW, vh / mapH) * PAD;
 
-    // First fit sets the zoom to show the whole island; later resizes keep the
-    // player's zoom so mobile URL-bar show/hide doesn't fight them. Zoom is
-    // otherwise unclamped: the player can zoom in/out without a hard limit.
+    // Portrait default framing: zoom into the island centre instead of showing
+    // the whole island (which wastes most of the tall viewport). Caps keep at
+    // least half the island's width visible so the coasts aren't fully off
+    // screen; landscape keeps the whole-island fit.
+    if (vw < vh) {
+      const zoomIn = Math.min(
+        (vh * PORTRAIT_FILL_H) / mapH,
+        vw / (mapW * PORTRAIT_MIN_WIDTH_VISIBLE),
+      );
+      if (zoomIn > fit) fit = zoomIn;
+    }
+
+    // First fit sets the default framing; later resizes keep the player's zoom
+    // so mobile URL-bar show/hide doesn't fight them. Zoom is otherwise
+    // unclamped: the player can zoom in/out without a hard limit. A fit against
+    // the seeded 900×640 is NOT final — the parent is measured right after
+    // boot, so the first real resize must re-zoom/re-center, else mobile boots
+    // framed to a 900×640 view that was never the actual canvas. Once fit to a
+    // non-seed size we latch `hasFitted` and only clamp/re-apply mesh
+    // projections on later resizes.
     if (!this.hasFitted) {
       cam.setZoom(fit);
       // Center the island with zoom taken into account. `cam.centerOn` ignores
@@ -481,8 +516,8 @@ export class MainScene extends Phaser.Scene {
       const visH = cam.height / cam.zoom;
       cam.scrollX = (this.boundsMinX + this.boundsMaxX) / 2 - visW / 2;
       cam.scrollY = (this.boundsMinY + this.boundsMaxY) / 2 - visH / 2;
+      if (vw !== SEED_W || vh !== SEED_H) this.hasFitted = true;
     }
-    this.hasFitted = true;
     this.clampCamera();
     // Mesh projection maps vertex units 1:1 to world pixels by scaling against
     // half the canvas size, so a RESIZE changes that ratio for every mesh.
