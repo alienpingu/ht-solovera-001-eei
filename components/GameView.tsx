@@ -8,6 +8,7 @@ import { TutorialDialog } from "@/components/ui/TutorialDialog";
 import { GameOverModal } from "@/components/ui/GameOverModal";
 import { WinModal } from "@/components/ui/WinModal";
 import { StartMenu } from "@/components/ui/StartMenu";
+import type { BuildingKind } from "@/game/data/tiles";
 import { bus } from "@/game/events/bus";
 
 /**
@@ -27,6 +28,7 @@ const GameCanvas = dynamic(() => import("@/components/GameCanvas"), {
 
 export default function GameView() {
   const [phase, setPhase] = useState<"menu" | "playing">("menu");
+  const [suggested, setSuggested] = useState<BuildingKind | null>(null);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -48,8 +50,8 @@ export default function GameView() {
     <div className="relative h-full w-full">
       <GameCanvas />
       <HUD />
-      <BuildingMenu />
-      <TutorialDialog />
+      <BuildingMenu suggested={suggested} />
+      <TutorialDialog onSuggestion={setSuggested} />
       <GameOverModal />
       <WinModal />
       {phase === "menu" && <StartMenu onStart={begin} />}

@@ -31,7 +31,7 @@ export default function GameCanvas() {
       gameRef.current = game;
       // Dev-only handle for debugging input/camera from the console/DevTools.
       if (process.env.NODE_ENV !== "production") {
-        (window as unknown as { __solovra?: Phaser.Game }).__solovra = game;
+        (window as unknown as { __pollisland?: Phaser.Game }).__pollisland = game;
       }
     };
     frame = requestAnimationFrame(start);
@@ -48,7 +48,7 @@ export default function GameCanvas() {
       id="game-root"
       ref={rootRef}
       className="absolute inset-0 touch-none"
-      aria-label="Solovra island game canvas"
+      aria-label="PollIsland island game canvas"
     />
   );
 }

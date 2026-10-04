@@ -13,8 +13,8 @@ export function StartMenu({ onStart }: { onStart: () => void }) {
         <p className="nes-text is-warning text-[10px] tracking-widest">
           Uncharted sector · planetfall
         </p>
-        <h1 className="mt-4 text-3xl font-black tracking-[0.15em] text-white drop-shadow-[0_2px_12px_rgba(56,189,248,0.35)]">
-          SOLOVRA
+        <h1 className="mt-4 text-xl font-black tracking-[0.12em] text-white drop-shadow-[0_2px_12px_rgba(56,189,248,0.35)] sm:text-2xl">
+          POLLISLAND
         </h1>
         <p className="mt-4 text-xs leading-relaxed text-white/85">
           Crash-landed on an uncharted island, you must balance industry and

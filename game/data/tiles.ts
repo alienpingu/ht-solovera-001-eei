@@ -126,8 +126,6 @@ export interface BuildingDef {
   power: number;
   /** Net food per tick (positive produces). */
   food: number;
-  /** If true, the footprint must touch at least one water cell. */
-  requiresWaterAdjacency?: boolean;
   /** Max residents a building shelters (houses). Population clamps to the total. */
   housingCapacity?: number;
   /** Staff a building needs to run at full output (factories), per building. */
@@ -304,8 +302,7 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
     popNeedHealth: 0,
     power: 0,
     food: 10,
-    requiresWaterAdjacency: true,
-    desc: "+10 food/tick, +$1 (needs water)",
+    desc: "+10 food/tick, +$1",
   },
 };
 

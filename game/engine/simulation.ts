@@ -1,4 +1,4 @@
-import { BUILDING_DEFS, GRID_W, GRID_H, ISLAND, isLand } from "@/game/data/tiles";
+import { BUILDING_DEFS, GRID_W, GRID_H, isLand } from "@/game/data/tiles";
 import type { BuildingKind } from "@/game/data/tiles";
 
 /**
@@ -136,29 +136,6 @@ export function canAfford(state: SimState, kind: BuildingKind): boolean {
 }
 
 /**
- * True if any water cell borders the footprint's one-cell perimeter ring
- * (the ring immediately around the footprint rectangle, in-bounds only).
- * Used by defs that need a water edge (monoculture_farm).
- */
-function footprintHasWaterAdjacent(row: number, col: number, kind: BuildingKind): boolean {
-  const def = BUILDING_DEFS[kind];
-  const rowBack = Math.floor((def.footH - 1) / 2);
-  const rowFront = Math.floor(def.footH / 2);
-  const colBack = Math.floor((def.footW - 1) / 2);
-  const colFront = Math.floor(def.footW / 2);
-  for (let r = row - rowBack - 1; r <= row + rowFront + 1; r++) {
-    for (let c = col - colBack - 1; c <= col + colFront + 1; c++) {
-      if (r < 0 || r >= GRID_H || c < 0 || c >= GRID_W) continue;
-      // Skip cells inside the footprint itself — only the perimeter ring counts.
-      const inside =
-        r >= row - rowBack && r <= row + rowFront && c >= col - colBack && c <= col + colFront;
-      if (!inside && ISLAND[r][c] === "water") return true;
-    }
-  }
-  return false;
-}
-
-/**
  * Validate that a building of `kind` may be placed with its anchor on
  * (row, col). Location checks only; affordability is the caller's concern
  * (kept separate so the UI can grey out buttons instead of failing taps).
@@ -171,10 +148,6 @@ export function canBuild(
 ): ActionResult {
   if (state.gameOver) return { ok: false, reason: "The island has fallen" };
   if (state.won) return { ok: false, reason: "The settlement has been secured" };
-  const def = BUILDING_DEFS[kind];
-  if (def.requiresWaterAdjacency && !footprintHasWaterAdjacent(row, col, kind)) {
-    return { ok: false, reason: "Farm needs to touch water" };
-  }
   for (const cell of footprintCells(row, col, kind)) {
     if (cell.row < 0 || cell.row >= GRID_H || cell.col < 0 || cell.col >= GRID_W) {
       return { ok: false, reason: "Building would hang off the island" };

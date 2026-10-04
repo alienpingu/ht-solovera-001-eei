@@ -1,4 +1,4 @@
-# Solovra — Island Survival
+# PollIsland — Island Survival
 
 This repo is a Phaser 3 + Next.js 15 game (isometric island survival sim).
 Before making changes, load the `phaser-senior-dev` skill — it documents the

@@ -124,8 +124,6 @@ export class MainScene extends Phaser.Scene {
   private lastPinchDist = 0;
   private lastMid = new Phaser.Math.Vector2();
 
-  private minZoom = 0.2;
-  private maxZoom = 3;
   private hasFitted = false;
 
   // Island extents in world units, recomputed on fit. Kept as fields so the
@@ -136,6 +134,14 @@ export class MainScene extends Phaser.Scene {
   private boundsMaxX = 0;
   private boundsMinY = 0;
   private boundsMaxY = 0;
+
+  /**
+   * World-space frame of the playable LANDMASS (grass), not the whole grid.
+   * The camera fits/centers on this so the island fills the screen instead of
+   * shrinking inside the 30x30 grid's bounding box (which also includes the
+   * water ring and the diamond's empty corners). Computed once and reused.
+   */
+  private landBounds: WorldBounds | null = null;
 
   private tickTimer?: Phaser.Time.TimerEvent;
   private unsubs: (() => void)[] = [];
@@ -413,6 +419,34 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
+   * Scan the grid's grass cells and return their world-space frame. The top
+   * face of the top row plus headroom for tall trees/buildings extends minY;
+   * half a tile out on each side gives the coastline breathing room.
+   */
+  private computeLandBounds(): WorldBounds {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let r = 0; r < GRID_H; r++) {
+      for (let c = 0; c < GRID_W; c++) {
+        if (!isLand(r, c)) continue;
+        const p = MainScene.isoToWorld(c, r);
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    return {
+      minX: minX - ISO.HALF_W,
+      maxX: maxX + ISO.HALF_W,
+      minY: minY - ISO.TILE_H * 2,
+      maxY: maxY,
+    };
+  }
+
+  /**
    * Fit the island with the CAMERA (zoom + manual centering) rather than by
    * scaling the container. Runs on every resize so portrait/landscape both
    * stay edge-to-edge. We deliberately avoid `camera.setBounds`: Phaser's
@@ -422,11 +456,11 @@ export class MainScene extends Phaser.Scene {
    */
   private fitCamera(): void {
     const cam = this.cameras.main;
-    const margin = ISO.TILE_H;
-    this.boundsMinX = -(GRID_H - 1) * ISO.HALF_W - ISO.HALF_W;
-    this.boundsMaxX = (GRID_W - 1) * ISO.HALF_W + ISO.HALF_W;
-    this.boundsMinY = -ISO.TILE_H * 2; // headroom for tall trees above row 0
-    this.boundsMaxY = (GRID_W - 1 + GRID_H - 1) * ISO.HALF_H + margin;
+    const bounds = (this.landBounds ??= this.computeLandBounds());
+    this.boundsMinX = bounds.minX;
+    this.boundsMaxX = bounds.maxX;
+    this.boundsMinY = bounds.minY;
+    this.boundsMaxY = bounds.maxY;
     const mapW = this.boundsMaxX - this.boundsMinX;
     const mapH = this.boundsMaxY - this.boundsMinY;
 
@@ -434,17 +468,21 @@ export class MainScene extends Phaser.Scene {
     const vh = this.scale.height;
     const PAD = 0.94; // breathing room around the island
     const fit = Math.min(vw / mapW, vh / mapH) * PAD;
-    this.minZoom = fit * 0.6;
-    this.maxZoom = fit * 3;
 
     // First fit sets the zoom to show the whole island; later resizes keep the
-    // player's zoom (clamped) so mobile URL-bar show/hide doesn't fight them.
-    const zoom = this.hasFitted
-      ? Phaser.Math.Clamp(cam.zoom, this.minZoom, this.maxZoom)
-      : fit;
-    cam.setZoom(zoom);
+    // player's zoom so mobile URL-bar show/hide doesn't fight them. Zoom is
+    // otherwise unclamped: the player can zoom in/out without a hard limit.
+    if (!this.hasFitted) {
+      cam.setZoom(fit);
+      // Center the island with zoom taken into account. `cam.centerOn` ignores
+      // zoom (scrollX = x - width/2), which at fit < 1 pushes the view's
+      // top-left toward the island centre and shoves the island off-centre.
+      const visW = cam.width / cam.zoom;
+      const visH = cam.height / cam.zoom;
+      cam.scrollX = (this.boundsMinX + this.boundsMaxX) / 2 - visW / 2;
+      cam.scrollY = (this.boundsMinY + this.boundsMaxY) / 2 - visH / 2;
+    }
     this.hasFitted = true;
-    cam.centerOn((this.boundsMinX + this.boundsMaxX) / 2, (this.boundsMinY + this.boundsMaxY) / 2);
     this.clampCamera();
     // Mesh projection maps vertex units 1:1 to world pixels by scaling against
     // half the canvas size, so a RESIZE changes that ratio for every mesh.
@@ -456,25 +494,19 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * Keep the island on screen by clamping the camera's world centre. When the
-   * visible area is larger than the island on an axis (the portrait case), the
-   * island is centred on that axis instead of pinned to an edge.
+   * Keep the island reachable while allowing free scrolling. The camera may
+   * travel up to half a view past each map edge, so the island can slide until
+   * any edge sits at the screen's centre — that slack is what lets a player
+   * drag cells hiding under the bottom UI bar back into reach on mobile. A
+   * clamp that kept the whole map on-screen could never clear an overlay.
+   * Clamping `scrollX/Y` directly (not `centerOn`) is exact at any zoom.
    */
   private clampCamera(): void {
     const cam = this.cameras.main;
     const visW = cam.width / cam.zoom;
     const visH = cam.height / cam.zoom;
-    // Phaser convention: world centre = scroll + half the SCREEN size.
-    const midX = cam.scrollX + cam.width / 2;
-    const midY = cam.scrollY + cam.height / 2;
-
-    const cxMin = this.boundsMinX + visW / 2;
-    const cxMax = this.boundsMaxX - visW / 2;
-    const cyMin = this.boundsMinY + visH / 2;
-    const cyMax = this.boundsMaxY - visH / 2;
-    const cx = cxMin > cxMax ? (this.boundsMinX + this.boundsMaxX) / 2 : Phaser.Math.Clamp(midX, cxMin, cxMax);
-    const cy = cyMin > cyMax ? (this.boundsMinY + this.boundsMaxY) / 2 : Phaser.Math.Clamp(midY, cyMin, cyMax);
-    cam.centerOn(cx, cy);
+    cam.scrollX = Phaser.Math.Clamp(cam.scrollX, this.boundsMinX - visW / 2, this.boundsMaxX - visW / 2);
+    cam.scrollY = Phaser.Math.Clamp(cam.scrollY, this.boundsMinY - visH / 2, this.boundsMaxY - visH / 2);
   }
 
   // ------------------------------------------------------------------
@@ -572,8 +604,8 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * Desktop zoom: the scroll wheel zooms about the cursor (the world point under
-   * the pointer stays put), mirroring the mobile pinch. Clamped to the same
-   * fit-derived min/max as the camera, then clamped back onto the island.
+   * the pointer stays put), mirroring the mobile pinch. Unclamped zoom, then the
+   * usual island scroll clamp.
    */
   private wireWheel(): void {
     this.input.on(
@@ -587,7 +619,7 @@ export class MainScene extends Phaser.Scene {
         const cam = this.cameras.main;
         const before = cam.getWorldPoint(pointer.x, pointer.y);
         const factor = deltaY > 0 ? 0.9 : 1.1;
-        cam.setZoom(Phaser.Math.Clamp(cam.zoom * factor, this.minZoom, this.maxZoom));
+        cam.setZoom(cam.zoom * factor);
         const after = cam.getWorldPoint(pointer.x, pointer.y);
         cam.scrollX += before.x - after.x;
         cam.scrollY += before.y - after.y;
@@ -629,7 +661,7 @@ export class MainScene extends Phaser.Scene {
 
     if (this.lastPinchDist > 0) {
       const ratio = dist / this.lastPinchDist;
-      cam.zoom = Phaser.Math.Clamp(cam.zoom * ratio, this.minZoom, this.maxZoom);
+      cam.zoom *= ratio;
       cam.scrollX -= (midX - this.lastMid.x) / cam.zoom;
       cam.scrollY -= (midY - this.lastMid.y) / cam.zoom;
       this.clampCamera();
@@ -792,6 +824,13 @@ export class MainScene extends Phaser.Scene {
       }),
       bus.on("sim:restart", () => this.restartRun()),
       bus.on("sim:start", () => this.startRun()),
+      // The tutorial freezes the day counter while a dialogue is on screen;
+      // pause drops the tick timer, resume recreates it (no-op if running).
+      bus.on("sim:pause", () => {
+        this.tickTimer?.remove();
+        this.tickTimer = undefined;
+      }),
+      bus.on("sim:resume", () => this.startRun()),
     );
     // Always clean up listeners + timers on scene teardown (HMR/navigation).
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {

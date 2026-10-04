@@ -42,6 +42,10 @@ export type GameEvents = {
   "sim:restart": [];
   /** React -> Phaser: begin ticking (leaves the welcome/story overlay). */
   "sim:start": [];
+  /** React -> Phaser: freeze the day counter (tutorial reading/acting). */
+  "sim:pause": [];
+  /** React -> Phaser: resume the day counter. */
+  "sim:resume": [];
 };
 
 export class EventBus<Events extends Record<string, unknown[]>> {

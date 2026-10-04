@@ -1,4 +1,4 @@
-# SOLOVRA
+# POLLISLAND
 
 A sci-fi society simulator. Crash-landed on an uncharted island, you are the
 last human awake in the wreck — and the only one who can manage the colony.
@@ -20,7 +20,7 @@ air, and grow the population. Balance all three or the island dies.
 - **Trees** clean the air, cancelling out factory smoke.
 
 Health is simply `100 − pollution`. Push pollution to 100 and the island
-falls. Survive to day 365 and Solovra is yours.
+falls. Survive to day 365 and PollIsland is yours.
 
 [screenshot: the island, mid-game, with a settlement and the HUD]
 

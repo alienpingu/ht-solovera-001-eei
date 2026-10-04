@@ -10,7 +10,7 @@ import {
   TARGET_DAYS,
 } from "../game/engine/simulation";
 import type { SimState } from "../game/engine/simulation";
-import { BUILDING_DEFS, isLand, GRID_W, GRID_H, ISLAND } from "../game/data/tiles";
+import { isLand, GRID_W, GRID_H } from "../game/data/tiles";
 import type { BuildingKind } from "../game/data/tiles";
 
 // The island shape is generated, so land cells move between runs. Pin
@@ -56,48 +56,6 @@ function findLandCells(n: number): { row: number; col: number }[] {
     }
   }
   return cells;
-}
-
-/** Farm-only mirror of the engine's water-adjacency rule (perimeter ring). */
-function farmPerimeterTouchesWater(row: number, col: number): boolean {
-  const def = BUILDING_DEFS.monoculture_farm;
-  const rowBack = Math.floor((def.footH - 1) / 2);
-  const rowFront = Math.floor(def.footH / 2);
-  const colBack = Math.floor((def.footW - 1) / 2);
-  const colFront = Math.floor(def.footW / 2);
-  for (let r = row - rowBack - 1; r <= row + rowFront + 1; r++) {
-    for (let c = col - colBack - 1; c <= col + colFront + 1; c++) {
-      if (r < 0 || r >= GRID_H || c < 0 || c >= GRID_W) continue;
-      const inside =
-        r >= row - rowBack && r <= row + rowFront && c >= col - colBack && c <= col + colFront;
-      if (!inside && ISLAND[r][c] === "water") return true;
-    }
-  }
-  return false;
-}
-
-/** A farm anchor whose footprint is free land AND (optionally) touches water. */
-function findFarmAnchor(state: SimState, needWater: boolean): [number, number] | null {
-  for (let r = 0; r < GRID_H; r++) {
-    for (let c = 0; c < GRID_W; c++) {
-      let ok = true;
-      for (const cell of footprintCells(r, c, "monoculture_farm")) {
-        if (
-          cell.row < 0 ||
-          cell.row >= GRID_H ||
-          cell.col < 0 ||
-          cell.col >= GRID_W ||
-          !isLand(cell.row, cell.col) ||
-          state.grid[cell.row][cell.col]
-        ) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok && farmPerimeterTouchesWater(r, c) === needWater) return [r, c];
-    }
-  }
-  return null;
 }
 
 let failures = 0;
@@ -186,24 +144,14 @@ if (rd.ok) {
   );
 }
 
-console.log("5) farm requires water adjacency");
+console.log("5) farm places on any free land");
 let s5 = createInitialState();
 s5.money = 1000;
-const far = findFarmAnchor(s5, false);
-const near = findFarmAnchor(s5, true);
-check("island has an interior (non-water-adjacent) spot", far !== null);
-check("island has a water-adjacent spot", near !== null);
-if (far) {
-  const blocked = canBuild(s5, far[0], far[1], "monoculture_farm");
-  check("farm blocked away from water", !blocked.ok);
-  check("blocked with the water reason", blocked.ok === false && blocked.reason === "Farm needs to touch water");
-}
-if (near) {
-  const p5 = placeBuilding(s5, near[0], near[1], "monoculture_farm");
-  check("farm ok next to water", p5.ok);
-  if (p5.ok) s5 = p5.state;
-  check("farm food +10/tick", tick(s5).foodProduced === 10);
-}
+const [rf5, cf5] = needAnchor(s5, "monoculture_farm");
+const p5 = placeBuilding(s5, rf5, cf5, "monoculture_farm");
+check("place farm on land ok", p5.ok);
+if (p5.ok) s5 = p5.state;
+check("farm food +10/tick", tick(s5).foodProduced === 10);
 
 console.log("6) food: farm feeds growth, hunger starves");
 // A house with no farm cannot hold a population: it grows one tick, then
@@ -223,11 +171,9 @@ check("foodConsumed tracks population", s6.foodConsumed === 1);
 // A farm plus a house: food covers the people, so growth sticks.
 let s6b = createInitialState();
 s6b.money = 1000;
-// findFarmAnchor gives a water-adjacent spot; use it directly.
-const farmSpot = findFarmAnchor(s6b, true);
-check("water-adjacent farm spot available", farmSpot !== null);
-if (farmSpot) {
-  const pf = placeBuilding(s6b, farmSpot[0], farmSpot[1], "monoculture_farm");
+const [rf6b, cf6b] = needAnchor(s6b, "monoculture_farm");
+{
+  const pf = placeBuilding(s6b, rf6b, cf6b, "monoculture_farm");
   check("place farm ok", pf.ok);
   if (pf.ok) s6b = pf.state;
   const [rhb, chb] = needAnchor(s6b, "house");
@@ -251,10 +197,8 @@ if (pr6.ok) s6c = pr6.state;
 // Two farms (+10 food each) feed a full 20-pop house; four trees offset the
 // house(2)+farms(2) pollution so the test runs the full 25 ticks.
 for (let i = 0; i < 2; i++) {
-  const spotCap = findFarmAnchor(s6c, true);
-  check("cap-test farm spot available", spotCap !== null);
-  if (!spotCap) break;
-  pr6 = placeBuilding(s6c, spotCap[0], spotCap[1], "monoculture_farm");
+  const [spotCapR, spotCapC] = needAnchor(s6c, "monoculture_farm");
+  pr6 = placeBuilding(s6c, spotCapR, spotCapC, "monoculture_farm");
   check("place cap-test farm ok", pr6.ok);
   if (pr6.ok) s6c = pr6.state;
 }
@@ -285,13 +229,10 @@ const [rhSt, chSt] = needAnchor(sf, "house");
 rs = placeBuilding(sf, rhSt, chSt, "house");
 check("place staffing house ok", rs.ok);
 if (rs.ok) sf = rs.state;
-const farmSpotSt = findFarmAnchor(sf, true);
-check("staffing farm spot available", farmSpotSt !== null);
-if (farmSpotSt) {
-  rs = placeBuilding(sf, farmSpotSt[0], farmSpotSt[1], "monoculture_farm");
-  check("place staffing farm ok", rs.ok);
-  if (rs.ok) sf = rs.state;
-}
+const [farmStR, farmStC] = needAnchor(sf, "monoculture_farm");
+rs = placeBuilding(sf, farmStR, farmStC, "monoculture_farm");
+check("place staffing farm ok", rs.ok);
+if (rs.ok) sf = rs.state;
 for (let i = 0; i < 3; i++) {
   const [re, ce] = needAnchor(sf, "eco");
   rs = placeBuilding(sf, re, ce, "eco");

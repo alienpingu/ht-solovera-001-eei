@@ -1,9 +1,9 @@
 ---
 name: phaser-senior-dev
-description: Use when working on this repo's Solovra island-survival game — Phaser 3 iso-grid rendering, the SimulationEngine, the event-bus bridge, building placement, React HUD/menu/modal overlays, assets, balance tuning, or Antirez-style code conventions.
+description: Use when working on this repo's PollIsland island-survival game — Phaser 3 iso-grid rendering, the SimulationEngine, the event-bus bridge, building placement, React HUD/menu/modal overlays, assets, balance tuning, or Antirez-style code conventions.
 ---
 
-# Solovra — Architecture & Conventions
+# PollIsland — Architecture & Conventions
 
 Project-specific operating manual. Read this before touching game code so
 future changes respect the invariants that keep the sim deterministic, the

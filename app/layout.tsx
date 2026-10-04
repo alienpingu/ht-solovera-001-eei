@@ -5,7 +5,7 @@ import "nes.css/css/nes.min.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Solovra — Island Survival",
+  title: "PollIsland — Island Survival",
   description:
     "A survival island sim: extract resources, grow your settlement, and keep pollution from destroying the island.",
   robots: { index: false, follow: false },

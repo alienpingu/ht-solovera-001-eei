@@ -28,7 +28,7 @@ function BuildingIcon({ kind }: { kind: BuildingKind }) {
   );
 }
 
-export function BuildingMenu() {
+export function BuildingMenu({ suggested }: { suggested: BuildingKind | null }) {
   const { state, selected } = useGameBridge();
 
   const pick = (kind: BuildingKind) => {
@@ -43,7 +43,7 @@ export function BuildingMenu() {
             const def = BUILDING_DEFS[kind];
             const affordable = state !== null && state.money >= def.cost;
             const active = selected === kind;
-            const cls = active
+const cls = active
               ? "is-primary"
               : affordable
                 ? ""
@@ -56,7 +56,7 @@ export function BuildingMenu() {
                 aria-pressed={active}
                 aria-label={`${def.label}: ${def.desc}. Cost $${def.cost}`}
                 title={def.desc}
-                className={`nes-btn build-btn w-full text-[10px] ${cls} p-0`}
+                className={`nes-btn build-btn w-full text-[10px] ${cls} ${suggested === kind ? "is-suggested" : ""}`}
               >
                 <BuildingIcon kind={kind} />
                 <span>{def.label}</span>

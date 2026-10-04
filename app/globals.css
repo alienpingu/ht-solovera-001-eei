@@ -37,6 +37,14 @@ img {
   padding: 0.4rem 0.75rem;
 }
 
+/* Desktop: pull the top HUD in from the edges so it doesn't span the whole
+   screen. ID selector beats any Tailwind/utility margin. */
+@media (min-width: 768px) {
+  #top-hud-box {
+    margin: 0 20%;
+  }
+}
+
 /* NES progress bars default to 48px tall — too chunky for the HUD bars. */
 .nes-progress.hud-bar {
   height: 18px;
@@ -53,4 +61,22 @@ img {
   align-items: center;
   justify-content: center;
   gap: 2px;
+}
+
+/* Tutorial target: the menu button the player should click next. A yellow
+   ring that stays visible even on is-disabled buttons. */
+.nes-btn.is-suggested {
+  outline: 4px solid #f7d51d;
+  outline-offset: 3px;
+  animation: suggest-pulse 1s steps(2) infinite;
+}
+
+@keyframes suggest-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(247, 213, 29, 0.85);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(247, 213, 29, 0);
+  }
 }

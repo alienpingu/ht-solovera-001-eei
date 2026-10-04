@@ -24,7 +24,7 @@ export function WinModal() {
           <span className="is-warning">{state.population}</span> people call it
           home, and the island&apos;s health settled at{" "}
           <span className="is-warning">{state.health}</span>. The smoke has
-          cleared — Solovra is yours.
+          cleared — PollIsland is yours.
         </p>
         <button
           type="button"

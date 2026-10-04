@@ -92,11 +92,16 @@ export function HUD() {
 
   return (
     <>
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 select-none p-2 pt-[max(0.75rem,env(safe-area-inset-top))] nes-container is-rounded is-dark hud-panel m-0 p-0">
+    <div id='top-hud-box' className="pointer-events-none absolute inset-x-0 top-0 z-20 select-none p-2 pt-[max(0.75rem,env(safe-area-inset-top))] nes-container is-rounded is-dark hud-panel mx-auto p-0">
       <div className="mx-auto flex max-w-xl flex-col gap-2 ">
         <div className="">
           <div className="flex items-center justify-between gap-3">
             <Stat icon={<CoinIcon />} value={`$${state?.money ?? "–"}`} label="Money" className="is-success" />
+            <Stat icon={<SunIcon />} value={`Day ${state?.tick ?? 0}`} label="Day" className="is-warning" />
+          </div>
+        </div>
+        <div className="">
+          <div className="flex items-center justify-between gap-3">
             <Stat
               icon={<BoltIcon />}
               value={`${powerNet < 0 ? "" : "+"}${powerNet}`}
@@ -110,10 +115,8 @@ export function HUD() {
               label="Food"
               className={foodShort ? "is-error" : "is-warning"}
             />
-            <Stat icon={<SunIcon />} value={`Day ${state?.tick ?? 0}`} label="Day" className="is-warning" />
           </div>
         </div>
-
         <div className="">
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2">
