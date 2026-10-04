@@ -38,7 +38,6 @@ Phaser/React boundary clean, and the code readable.
 | `game/data/island.json` | Generated 30×30 water/grass grid (regenerate, don't hand-edit) |
 | `game/scenes/BootScene.ts` | Preloads Kenney atlases + OBJ/colormap models, bakes ghost/placeholder textures |
 | `game/scenes/MainScene.ts` | Atlas-sprite ground + **Mesh** buildings, input, tick loop, owns authoritative `SimState` |
-| `game/scenes/TileInspectorScene.ts` | `/test` atlas frame inspector (tap a tile → frame id) |
 | `components/GameView.tsx` | Client shell; `next/dynamic` import of GameCanvas (`ssr:false`) |
 | `components/GameCanvas.tsx` | Phaser mount + `game.destroy(true)` on unmount |
 | `components/ui/*` | HUD, BuildingMenu, GameOverModal, `useGameBridge` hook |
@@ -169,8 +168,8 @@ npm run dev             # dev server (StrictMode double-mounts — GameCanvas mu
 - **Change the ground art**: point `TILE_FRAME` in `game/data/tiles.ts` at a
   different landscape atlas frame. Ground frames must be 132×83 flat diamonds
   (the visible top face is the 132×66 diamond at frame y=1..67) so
-  `GROUND_ORIGIN_Y = 67/83` keeps them on the grid. Use the `/test` inspector to
-  find frame ids.
+  `GROUND_ORIGIN_Y = 67/83` keeps them on the grid. Inspect frames by eyeballing
+  the atlas sheet directly.
 - **Add Kenney/free art**: both packs load as TexturePacker atlases, so any
   frame is available by sheet name with no preload edit. If you add a new
   pack, vendor the `Spritesheet/*.png` + `*.xml` and `load.atlas` it in

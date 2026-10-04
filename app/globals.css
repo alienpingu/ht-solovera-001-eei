@@ -9,11 +9,14 @@ body {
   overscroll-behavior: none;
 }
 
+/* NES.css ships a light reboot (white bg, dark text, system font) — pin it back
+   to the game's dark slate theme and run the pixel font from next/font. */
 body {
   background: #0d1f3c;
   color: #fff;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-pixel), "Press Start 2P", monospace;
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -22,4 +25,32 @@ body {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+
+/* Building previews are small pixel-art thumbnails; keep them crunchy. */
+img {
+  image-rendering: pixelated;
+}
+
+/* HUD containers are compact compared to NES.css's default 1rem/1.5rem pad. */
+.nes-container.hud-panel {
+  padding: 0.4rem 0.75rem;
+}
+
+/* NES progress bars default to 48px tall — too chunky for the HUD bars. */
+.nes-progress.hud-bar {
+  height: 18px;
+}
+
+/* Build-menu buttons carry icon+label+cost; NES's inline-block wins over a
+   Tailwind flex utility, so give them a taller hit target and a column stack
+   explicitly. */
+.nes-btn.build-btn {
+  min-height: 74px;
+  margin: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
 }

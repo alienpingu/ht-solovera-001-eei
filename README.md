@@ -70,9 +70,9 @@ falls. Survive to day 365 and Solovra is yours.
 | `game/engine/isoMesh.ts` | Pure OBJ → iso-vertex projector feeding `Mesh.addVertices` |
 | `game/data/tiles.ts` | Iso constants, ground art frames, `BUILDING_DEFS` (all balance) |
 | `game/data/island.json` | Generated 30×30 water/grass grid (regenerate, don't hand-edit) |
-| `game/scenes/*` | Boot (preloads art/models), Main (render + input + tick), TileInspector |
+| `game/scenes/*` | Boot (preloads art/models), Main (render + input + tick) |
 | `components/GameCanvas.tsx` | Phaser mount via `next/dynamic(ssr:false)`; destroys game on unmount |
-| `components/ui/*` | HUD, BuildingMenu, start/welcome/win/game-over screens, `useGameBridge` |
+| `components/ui/*` | HUD, BuildingMenu, start/win/game-over screens, `useGameBridge` |
 | `scripts/gen-island.mjs` | Deterministic island generator |
 | `scripts/sim-test.ts` | Sim sanity checks |
 

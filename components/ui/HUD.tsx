@@ -4,10 +4,10 @@ import { useGameBridge } from "@/components/ui/useGameBridge";
 
 /**
  * Top status bar: live resource readout (money / population / day) plus the
- * two survival bars (health / pollution). Icons are inline SVG so there are no
- * image assets to load and they stay crisp at any DPI. Text is white on a
- * solid dark panel with a drop shadow so it survives bright outdoor screens.
- * Values update only when the sim emits (1 tick per second max).
+ * two survival bars (health / pollution) and the power/food net. Icons are
+ * inline SVG (no image assets, crisp at any DPI). Every panel is NES.css —
+ * retro pixel chrome over the game canvas. Values update only when the sim
+ * emits (1 tick per second max).
  */
 
 function CoinIcon() {
@@ -41,6 +41,23 @@ function SunIcon() {
   );
 }
 
+function BoltIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path d="M13 2 4.5 13.5h5L11 22l8.5-11.5h-5L13 2z" fill="#fde047" stroke="#a16207" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function WheatIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path d="M12 22V9M12 9c-2.5-1-4-3-3.5-5.5C11 3 12 5 12 6.5 12 5 13 3 15.5 3.5 16 6 14.5 8 12 9z" fill="#fbbf24" stroke="#b45309" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M12 15c-2.2-.8-3.5-2.6-3-4.6 2.5-.4 3.5 1.5 3 2.8.5-1.3 1.5-3.2 4-2.8.5 2-0.8 3.8-3 4.6z" fill="#fbbf24" stroke="#b45309" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function Stat({
   icon,
   value,
@@ -53,11 +70,9 @@ function Stat({
   className: string;
 }) {
   return (
-    <span className="flex items-center gap-1.5" aria-label={label}>
+    <span className="nes-text flex items-center gap-1.5" aria-label={label}>
       {icon}
-      <span className={`text-sm font-bold tabular-nums drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] ${className}`}>
-        {value}
-      </span>
+      <span className={`text-xs ${className}`}>{value}</span>
     </span>
   );
 }
@@ -67,55 +82,59 @@ export function HUD() {
 
   const health = state?.health ?? 100;
   const pollution = state?.pollution ?? 0;
+  const powerNet = (state?.powerProduced ?? 0) - (state?.powerConsumed ?? 0);
+  const foodNet = (state?.foodProduced ?? 0) - (state?.foodConsumed ?? 0);
+  const powerShort = state !== null && powerNet < 0;
+  const foodShort = state !== null && foodNet < 0;
+  const pop = state?.population ?? 0;
+  const cap = state?.housingCapacity ?? 0;
+  const healthVariant = health > 60 ? "is-success" : health > 30 ? "is-warning" : "is-error";
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 select-none p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
-      <div className="mx-auto flex max-w-xl flex-col gap-2">
-        <div className="flex items-center justify-between gap-3 rounded-xl bg-black/65 px-4 py-2 shadow-lg backdrop-blur-sm">
-          <Stat icon={<CoinIcon />} value={`$${state?.money ?? "–"}`} label="Money" className="text-emerald-300" />
-          <Stat icon={<PeopleIcon />} value={state?.population ?? 0} label="Population" className="text-sky-300" />
-          <Stat icon={<SunIcon />} value={`Day ${state?.tick ?? 0}`} label="Day" className="text-amber-200" />
+    <>
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 select-none p-2 pt-[max(0.75rem,env(safe-area-inset-top))] nes-container is-rounded is-dark hud-panel m-0 p-0">
+      <div className="mx-auto flex max-w-xl flex-col gap-2 ">
+        <div className="">
+          <div className="flex items-center justify-between gap-3">
+            <Stat icon={<CoinIcon />} value={`$${state?.money ?? "–"}`} label="Money" className="is-success" />
+            <Stat
+              icon={<BoltIcon />}
+              value={`${powerNet < 0 ? "" : "+"}${powerNet}`}
+              label="Power"
+              className={powerShort ? "is-error" : "is-warning"}
+            />
+            <Stat icon={<PeopleIcon />} value={cap > 0 ? `${pop} / ${cap}` : pop} label="Population" className="is-primary" />
+            <Stat
+              icon={<WheatIcon />}
+              value={`${foodNet < 0 ? "" : "+"}${foodNet}`}
+              label="Food"
+              className={foodShort ? "is-error" : "is-warning"}
+            />
+            <Stat icon={<SunIcon />} value={`Day ${state?.tick ?? 0}`} label="Day" className="is-warning" />
+          </div>
         </div>
 
-        <div className="flex flex-col gap-1.5 rounded-xl bg-black/55 px-3 py-2 shadow-lg backdrop-blur-sm">
-          <div className="flex items-center gap-2">
-            <span className="w-12 text-[10px] font-bold uppercase tracking-wide text-emerald-200 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]">
-              Health
-            </span>
-            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-white/15">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  health > 60 ? "bg-emerald-400" : health > 30 ? "bg-amber-400" : "bg-red-500"
-                }`}
-                style={{ width: `${health}%` }}
-              />
+        <div className="">
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <span className="nes-text is-success w-12 text-[10px]">Health</span>
+              <progress className={`nes-progress hud-bar ${healthVariant}`} value={health} max={100} />
+              <span className="nes-text is-success w-8 text-right text-xs">{health}</span>
             </div>
-            <span className="w-8 text-right text-xs font-bold tabular-nums text-emerald-200">
-              {health}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-12 text-[10px] font-bold uppercase tracking-wide text-red-200 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]">
-              Pollution
-            </span>
-            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-white/15">
-              <div
-                className="h-full rounded-full bg-red-400 transition-all duration-500"
-                style={{ width: `${pollution}%` }}
-              />
+            <div className="flex items-center gap-2">
+              <span className="nes-text is-error w-12 text-[10px]">Pollu.</span>
+              <progress className="nes-progress is-error hud-bar" value={pollution} max={100} />
+              <span className="nes-text is-error w-8 text-right text-xs">{pollution}</span>
             </div>
-            <span className="w-8 text-right text-xs font-bold tabular-nums text-red-200">
-              {pollution}
-            </span>
           </div>
         </div>
       </div>
-
-      {toast && (
-        <div className="pointer-events-auto mx-auto mt-2 max-w-xl rounded-md bg-red-600/95 px-3 py-1.5 text-center text-xs font-semibold text-white shadow-lg">
-          {toast}
+    </div>
+  {toast && (
+        <div className="nes-container is-rounded is-dark pointer-events-auto mx-auto mt-2 max-w-xl py-2 text-center">
+          <span className="nes-text is-error text-xs">{toast}</span>
         </div>
       )}
-    </div>
+  </>  
   );
 }

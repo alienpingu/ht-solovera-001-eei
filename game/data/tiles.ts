@@ -56,7 +56,13 @@ export function isLand(row: number, col: number): boolean {
   return ISLAND[row][col] !== "water";
 }
 
-export type BuildingKind = "factory" | "house" | "eco";
+export type BuildingKind =
+  | "factory"
+  | "house"
+  | "eco"
+  | "coal_plant"
+  | "solar_farm"
+  | "monoculture_farm";
 
 /**
  * Opaque 3D-model descriptor. `dir`/`obj`/`tex` name files under
@@ -116,6 +122,16 @@ export interface BuildingDef {
   popGrowth: number;
   /** Minimum island health required for the population to grow. */
   popNeedHealth: number;
+  /** Net power per tick: positive produces, negative consumes. */
+  power: number;
+  /** Net food per tick (positive produces). */
+  food: number;
+  /** If true, the footprint must touch at least one water cell. */
+  requiresWaterAdjacency?: boolean;
+  /** Max residents a building shelters (houses). Population clamps to the total. */
+  housingCapacity?: number;
+  /** Staff a building needs to run at full output (factories), per building. */
+  workersRequired?: number;
   desc: string;
 }
 
@@ -144,7 +160,10 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
     pollution: 3,
     popGrowth: 0,
     popNeedHealth: 0,
-    desc: "+$3/tick, pollution +3",
+    power: -5,
+    food: 0,
+    workersRequired: 10,
+    desc: "+$3/tick (needs 10 workers + power), pollution +3",
   },
   house: {
     label: "House",
@@ -170,7 +189,10 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
     pollution: 2,
     popGrowth: 1,
     popNeedHealth: 40,
-    desc: "+1 pop/tick (needs health ≥ 40)",
+    power: -1,
+    food: 0,
+    housingCapacity: 20,
+    desc: "+1 pop/tick (max 20/house, needs health ≥ 40, food)",
   },
   eco: {
     label: "Tree",
@@ -196,9 +218,103 @@ export const BUILDING_DEFS: Record<BuildingKind, BuildingDef> = {
     pollution: -1,
     popGrowth: 0,
     popNeedHealth: 0,
+    power: 0,
+    food: 0,
     desc: "pollution -1/tick",
+  },
+  coal_plant: {
+    label: "Coal Plant",
+    sheet: "buildings",
+    texture: "buildingTiles_118.png",
+    footW: 2,
+    footH: 2,
+    model: {
+      dir: "coal_plant",
+      obj: "building-r.obj",
+      tex: "colormap.png",
+      scale: 1.06496,
+      yawDeg: 180,
+      offsetX: 0,
+      offsetY: 0,
+      offsetZ: 0,
+      raisePx: 66,
+      preview: "/assets/models/coal_plant/building-r.png",
+    },
+    cost: 50,
+    refundRatio: 0.5,
+    income: 0,
+    pollution: 6,
+    popGrowth: 0,
+    popNeedHealth: 0,
+    power: 15,
+    food: 0,
+    desc: "+15 power/tick, pollution +6",
+  },
+  solar_farm: {
+    label: "Solar Farm",
+    sheet: "landscape",
+    texture: "landscapeTiles_067.png",
+    footW: 2,
+    footH: 2,
+    model: {
+      dir: "solar_plant",
+      obj: "solar-panel-landscape-group.obj",
+      tex: "colormap.png",
+      scale: 1.66113,
+      yawDeg: 180,
+      offsetX: 0,
+      offsetY: 0,
+      offsetZ: 0,
+      raisePx: 66,
+      preview: "/assets/models/solar_plant/solar-panel-landscape-group.png",
+    },
+    cost: 80,
+    refundRatio: 0.5,
+    income: 0,
+    pollution: 0,
+    popGrowth: 0,
+    popNeedHealth: 0,
+    power: 6,
+    food: 0,
+    desc: "+6 power/tick, zero pollution",
+  },
+  monoculture_farm: {
+    label: "Farm",
+    sheet: "landscape",
+    texture: "landscapeTiles_067.png",
+    footW: 2,
+    footH: 2,
+    model: {
+      dir: "food_farm",
+      obj: "building-t.obj",
+      tex: "colormap.png",
+      scale: 1.28535,
+      yawDeg: 180,
+      offsetX: 0,
+      offsetY: 0,
+      offsetZ: 0,
+      raisePx: 66,
+      preview: "/assets/models/food_farm/building-t.png",
+    },
+    cost: 25,
+    refundRatio: 0.5,
+    income: 0,
+    pollution: 1,
+    popGrowth: 0,
+    popNeedHealth: 0,
+    power: 0,
+    food: 10,
+    requiresWaterAdjacency: true,
+    desc: "+10 food/tick, +$1 (needs water)",
   },
 };
 
 /** UI order for the build menu. */
-export const BUILDING_ORDER: BuildingKind[] = ["factory", "house", "eco"];
+export const BUILDING_ORDER: BuildingKind[] = [
+  "factory",
+  "house",
+  "eco",
+  "coal_plant",
+  "solar_farm",
+  "monoculture_farm",
+];

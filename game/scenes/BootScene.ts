@@ -93,6 +93,11 @@ function makeGhostTextures(scene: Phaser.Scene): void {
   g.clear();
   drawDiamond(g, GHOST_POINTS, 0xff5a5a, 0.5, 0xb0231e);
   g.generateTexture("ghost-bad", DIAMOND_FRAME_W, DIAMOND_FRAME_H);
+  g.clear();
+  // Buildable but not yet affordable: amber tells the player "cut more trees",
+  // so a red tile genuinely means blocked rather than "not enough cash yet".
+  drawDiamond(g, GHOST_POINTS, 0xf59e0b, 0.5, 0xb45309);
+  g.generateTexture("ghost-unfunded", DIAMOND_FRAME_W, DIAMOND_FRAME_H);
   g.destroy();
 }
 

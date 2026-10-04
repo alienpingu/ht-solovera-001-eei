@@ -28,9 +28,37 @@ import { bus } from "@/game/events/bus";
 
 const CELL_KEY = (row: number, col: number): string => `${row}:${col}`;
 
-/** Ghost tints: green = buildable + affordable, red = blocked. */
+/** Ghost tints: green = buildable + affordable, amber = affordable-locked, red = blocked. */
 const GHOST_OK = 0x3ddc84;
 const GHOST_BAD = 0xff5a5a;
+const GHOST_UNFUNDED = 0xf59e0b;
+
+/**
+ * The island starts seeded with a random wild forest (the player's only
+ * starting resource — cut trees for cash). Range tuned so there is enough wood
+ * to bootstrap factories + power without the forest trivializing pollution.
+ */
+const MIN_TREES = 24;
+const MAX_TREES = 38;
+/** Rejection-sampling cap; a tiny island can't loop forever, it just spawns fewer. */
+const SCATTER_ATTEMPTS = 500;
+
+/** Axis-aligned world-space box used to hit-test buildings by their visual extent. */
+interface WorldBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/** Bookkeeping for a placed building's clickable box (anchor + depth for front-most picking). */
+interface BuildingHit {
+  row: number;
+  col: number;
+  kind: BuildingKind;
+  depth: number;
+  aabb: WorldBounds;
+}
 
 /**
  * MainScene: renders the iso island, owns the authoritative SimState, and
@@ -53,6 +81,10 @@ export class MainScene extends Phaser.Scene {
 
   /** Buildings placed on the grid, keyed by `${row}:${col}` (anchor cell). */
   private buildingSprites = new Map<string, Phaser.GameObjects.Image | Phaser.GameObjects.Mesh>();
+
+  /** Clickable world-space boxes for the same buildings, so a tap on a tall
+   *  building's body resolves to IT rather than the empty ground cell behind it. */
+  private buildingHits = new Map<string, BuildingHit>();
 
   /** Translucent buildable/water overlay, drawn only while placing. */
   private gridGraphics!: Phaser.GameObjects.Graphics;
@@ -113,7 +145,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.state = createInitialState();
+    // Seed the island with a random wild forest. The RNG lives here (Phaser
+    // side); the pure engine just places the handed cells as free trees.
+    const seedTrees = this.scatterTrees();
+    this.state = createInitialState(seedTrees);
     this.iso = this.add.container(0, 0);
 
     // Build overlay sits under every tile (tiles are depth >= 1).
@@ -122,6 +157,7 @@ export class MainScene extends Phaser.Scene {
     this.iso.add(this.gridGraphics);
 
     this.renderTiles();
+    for (const t of seedTrees) this.addBuildingSprite(t.row, t.col, "eco");
 
     // Ghost building sprite + the diamond outline that nests with the ground.
     // The outline is drawn in the ground frame's own space (diamond at frame
@@ -152,6 +188,26 @@ export class MainScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // Rendering
   // ------------------------------------------------------------------
+
+  /**
+   * Pick a random set of land cells for the starting forest. Rejection samples
+   * unique grass cells (trees are 1x1), so there is no overlap and no water.
+   * Called on a fresh grid, so occupancy is implicit — the Set is the only
+   * dedupe. Randomness is deliberately Phaser-side: the sim engine has none.
+   */
+  private scatterTrees(): { row: number; col: number }[] {
+    const count = Phaser.Math.Between(MIN_TREES, MAX_TREES);
+    const trees: { row: number; col: number }[] = [];
+    const used = new Set<string>();
+    for (let attempt = 0; attempt < SCATTER_ATTEMPTS && trees.length < count; attempt++) {
+      const row = Phaser.Math.Between(0, GRID_H - 1);
+      const col = Phaser.Math.Between(0, GRID_W - 1);
+      if (used.has(CELL_KEY(row, col)) || !isLand(row, col)) continue;
+      used.add(CELL_KEY(row, col));
+      trees.push({ row, col });
+    }
+    return trees;
+  }
 
   /**
    * Draw the ground as one atlas sprite per cell. There is no tilemap and no
@@ -218,6 +274,22 @@ export class MainScene extends Phaser.Scene {
     const mesh = new Phaser.GameObjects.Mesh(this, 0, 0, MODEL_TEX_KEY(kind));
     const data = this.cache.obj.get(MODEL_OBJ_KEY(kind)) as unknown as ParsedObjData;
     const { verts, uvs } = projectObj(data, def.model);
+    // Stash the projected 2D extent (relative to the mesh origin) so the click
+    // hit-test has the building's visual box. The mesh transform renders Y
+    // negated (see isoMesh), so the world box is mirrored on that axis.
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < verts.length; i += 3) {
+      const x = verts[i];
+      const y = -verts[i + 1];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    (mesh as Phaser.GameObjects.Mesh & { isoBounds: WorldBounds }).isoBounds = { minX, maxX, minY, maxY };
     // projectObj's Y negation reflects face winding, so the default CCW
     // culling would throw away the visible faces. Render all faces and let the
     // per-face painter depth (Z in projectObj) sort them.
@@ -253,9 +325,43 @@ export class MainScene extends Phaser.Scene {
     // Meshes anchor at the cell's bottom vertex; raise them so the base sits on
     // the grass. Sprites are already bottom-anchored at that vertex.
     obj.setPosition(pos.x, obj instanceof Phaser.GameObjects.Mesh ? pos.y - def.model.raisePx : pos.y);
-    obj.setDepth(MainScene.buildingDepth(row, col, kind));
+    const depth = MainScene.buildingDepth(row, col, kind);
+    obj.setDepth(depth);
     this.buildingSprites.set(CELL_KEY(row, col), obj);
+    this.buildingHits.set(CELL_KEY(row, col), {
+      row,
+      col,
+      kind,
+      depth,
+      aabb: this.buildingWorldBounds(obj, pos, def.model.raisePx),
+    });
     this.sortIso();
+  }
+
+  /** World-space clickable box of a placed building. Mesh bounds come from the
+   *  projected verts (stored on the mesh) shifted by its position; sprite
+   *  fallbacks use the frame's own bounds. */
+  private buildingWorldBounds(
+    obj: Phaser.GameObjects.Image | Phaser.GameObjects.Mesh,
+    pos: Phaser.Math.Vector2,
+    raisePx: number,
+  ): WorldBounds {
+    if (obj instanceof Phaser.GameObjects.Mesh) {
+      const b = (obj as Phaser.GameObjects.Mesh & { isoBounds?: WorldBounds }).isoBounds ?? {
+        minX: -ISO.HALF_W,
+        maxX: ISO.HALF_W,
+        minY: -ISO.TILE_H,
+        maxY: 0,
+      };
+      return {
+        minX: pos.x + b.minX,
+        maxX: pos.x + b.maxX,
+        minY: pos.y - raisePx + b.minY,
+        maxY: pos.y - raisePx + b.maxY,
+      };
+    }
+    const g = obj.getBounds();
+    return { minX: g.x, maxX: g.x + g.width, minY: g.y, maxY: g.y + g.height };
   }
 
   /**
@@ -272,6 +378,7 @@ export class MainScene extends Phaser.Scene {
     if (img) {
       img.destroy();
       this.buildingSprites.delete(CELL_KEY(row, col));
+      this.buildingHits.delete(CELL_KEY(row, col));
     }
   }
 
@@ -489,7 +596,7 @@ export class MainScene extends Phaser.Scene {
     );
   }
 
-  /** Desktop selection shortcuts: 1/2/3 pick a building, Esc clears. */
+  /** Desktop selection shortcuts: 1..6 pick a building, Esc clears. */
   private wireKeys(): void {
     const keyboard = this.input.keyboard;
     if (!keyboard) return;
@@ -500,6 +607,9 @@ export class MainScene extends Phaser.Scene {
     keyboard.on("keydown-ONE", () => pick(0));
     keyboard.on("keydown-TWO", () => pick(1));
     keyboard.on("keydown-THREE", () => pick(2));
+    keyboard.on("keydown-FOUR", () => pick(3));
+    keyboard.on("keydown-FIVE", () => pick(4));
+    keyboard.on("keydown-SIX", () => pick(5));
     keyboard.on("keydown-ESC", () => bus.emit("build:select", null));
   }
 
@@ -548,6 +658,23 @@ export class MainScene extends Phaser.Scene {
     return { row, col };
   }
 
+  /**
+   * Front-most building whose world box contains the point, or null. Tall
+   * objects render ABOVE their footprint (foliage overlaps the cell behind),
+   * so ground-cell mapping alone can't resolve "what did I click?" — this box
+   * test can. Iterates all placed buildings, keeping the one with the largest
+   * depth (closest to the camera).
+   */
+  private buildingAtWorld(worldX: number, worldY: number): BuildingHit | null {
+    let best: BuildingHit | null = null;
+    for (const hit of this.buildingHits.values()) {
+      if (worldX < hit.aabb.minX || worldX > hit.aabb.maxX) continue;
+      if (worldY < hit.aabb.minY || worldY > hit.aabb.maxY) continue;
+      if (!best || hit.depth > best.depth) best = hit;
+    }
+    return best;
+  }
+
   private commitAt(row: number, col: number): void {
     const kind = this.selectedKind;
     if (!kind) return;
@@ -556,6 +683,9 @@ export class MainScene extends Phaser.Scene {
       this.state = res.state;
       this.addBuildingSprite(row, col, kind);
       bus.emit("build:placed", { row, col, kind });
+      // Deselect after a successful placement so the player doesn't
+      // accidentally double-build from a follow-up tap/drag.
+      bus.emit("build:select", null);
       bus.emit("sim:update", this.state);
       this.drawBuildGrid();
     } else {
@@ -565,7 +695,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   private handleDemolishTap(worldX: number, worldY: number): void {
-    const cell = this.worldToCell(worldX, worldY);
+    // Prefer the building actually under the pointer (its visual box) so a tap
+    // on a tall tree's foliage resolves to that tree instead of the empty cell
+    // behind it; ground-cell mapping is the fallback for empty tiles.
+    const hit = this.buildingAtWorld(worldX, worldY);
+    const cell = hit ? { row: hit.row, col: hit.col } : this.worldToCell(worldX, worldY);
     if (!cell) return;
     const res = removeBuilding(this.state, cell.row, cell.col);
     if (res.ok) {
@@ -608,8 +742,13 @@ export class MainScene extends Phaser.Scene {
       return;
     }
     const pos = MainScene.isoToWorld(cell.col, cell.row);
-    const ok = canBuild(this.state, cell.row, cell.col, kind).ok && canAfford(this.state, kind);
-    const tint = ok ? GHOST_OK : GHOST_BAD;
+    const buildable = canBuild(this.state, cell.row, cell.col, kind).ok;
+    const affordable = canAfford(this.state, kind);
+    // Three states: green = go, amber = location ok but can't afford it yet
+    // (cut more trees), red = actually blocked. Distinguishing the two reds is
+    // what stops "I just cut a tree and still can't build" from being a mystery.
+    const ghostState = buildable ? (affordable ? "ok" : "unfunded") : "bad";
+    const tint = ghostState === "ok" ? GHOST_OK : ghostState === "unfunded" ? GHOST_UNFUNDED : GHOST_BAD;
     const def = BUILDING_DEFS[kind];
 
     if (this.ghostMesh) {
@@ -635,7 +774,7 @@ export class MainScene extends Phaser.Scene {
     // Anchor the outline's frame to the anchor cell: the ground top-face top
     // vertex sits at frame y=1, so the frame top-left is (pos.x - HALF_W, pos.y - TILE_H - 1).
     this.ghostOutline.setPosition(pos.x - ISO.HALF_W, pos.y - ISO.TILE_H - 1);
-    this.ghostOutline.setTexture(ok ? "ghost-ok" : "ghost-bad");
+    this.ghostOutline.setTexture(`ghost-${ghostState}`);
     this.ghostOutline.setVisible(true);
   }
 
@@ -695,12 +834,16 @@ export class MainScene extends Phaser.Scene {
   private restartRun(): void {
     this.buildingSprites.forEach((obj) => obj.destroy());
     this.buildingSprites.clear();
+    this.buildingHits.clear();
     if (this.ghostMesh) {
       this.ghostMesh.destroy();
       this.ghostMesh = null;
     }
     this.ghostKind = null;
-    this.state = createInitialState();
+    // A fresh run reshuffles the wild forest.
+    const seedTrees = this.scatterTrees();
+    this.state = createInitialState(seedTrees);
+    for (const t of seedTrees) this.addBuildingSprite(t.row, t.col, "eco");
     this.selectedKind = null;
     bus.emit("build:select", null);
     this.hovered = null;

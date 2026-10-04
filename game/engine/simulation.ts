@@ -1,4 +1,4 @@
-import { BUILDING_DEFS, GRID_W, GRID_H, isLand } from "@/game/data/tiles";
+import { BUILDING_DEFS, GRID_W, GRID_H, ISLAND, isLand } from "@/game/data/tiles";
 import type { BuildingKind } from "@/game/data/tiles";
 
 /**
@@ -37,6 +37,16 @@ export interface SimState {
   health: number;
   /** 0..100. Pollution drives health loss; at 100 the island dies. */
   pollution: number;
+  /** Net power produced this tick (sum of positive building power). */
+  powerProduced: number;
+  /** Net power consumed this tick (sum of negative building power, positive number). */
+  powerConsumed: number;
+  /** Net food produced this tick (sum of positive building food). */
+  foodProduced: number;
+  /** Food eaten this tick — the population before any starvation/growth. */
+  foodConsumed: number;
+  /** Total residents all houses can shelter (clamps population growth). */
+  housingCapacity: number;
   gameOver: boolean;
   /** True once the settlement has survived TARGET_DAYS ticks. */
   won: boolean;
@@ -44,7 +54,7 @@ export interface SimState {
   grid: (GridCell | null)[][];
 }
 
-export const START_MONEY = 50;
+export const START_MONEY = 0;
 export const MAX_POLLUTION = 100;
 /** Ticks to survive to win the run (the mission goal). */
 export const TARGET_DAYS = 365;
@@ -55,18 +65,34 @@ export type ActionResult =
   | { ok: true; state: SimState }
   | { ok: false; reason: string };
 
-export function createInitialState(): SimState {
+/**
+ * Fresh state with no buildings. `seedTrees` lets the caller (MainScene, which
+ * owns the RNG) pre-scatter wild trees across the island so the player starts
+ * with a harvestable forest instead of an empty grid. The engine itself stays
+ * deterministic — it just places whatever cells it is handed, as free `eco`
+ * trees (no cost, same pollution-cleaning + demolish-refund behavior).
+ */
+export function createInitialState(seedTrees: { row: number; col: number }[] = []): SimState {
+  const grid: (GridCell | null)[][] = Array.from({ length: GRID_H }, () =>
+    Array<GridCell | null>(GRID_W).fill(null),
+  );
+  for (const t of seedTrees) {
+    grid[t.row][t.col] = { kind: "eco", row: t.row, col: t.col };
+  }
   return {
     tick: 0,
     money: START_MONEY,
     population: 0,
     health: MAX_POLLUTION,
     pollution: 0,
+    powerProduced: 0,
+    powerConsumed: 0,
+    foodProduced: 0,
+    foodConsumed: 0,
+    housingCapacity: 0,
     gameOver: false,
     won: false,
-    grid: Array.from({ length: GRID_H }, () =>
-      Array<GridCell | null>(GRID_W).fill(null),
-    ),
+    grid,
   };
 }
 
@@ -110,6 +136,29 @@ export function canAfford(state: SimState, kind: BuildingKind): boolean {
 }
 
 /**
+ * True if any water cell borders the footprint's one-cell perimeter ring
+ * (the ring immediately around the footprint rectangle, in-bounds only).
+ * Used by defs that need a water edge (monoculture_farm).
+ */
+function footprintHasWaterAdjacent(row: number, col: number, kind: BuildingKind): boolean {
+  const def = BUILDING_DEFS[kind];
+  const rowBack = Math.floor((def.footH - 1) / 2);
+  const rowFront = Math.floor(def.footH / 2);
+  const colBack = Math.floor((def.footW - 1) / 2);
+  const colFront = Math.floor(def.footW / 2);
+  for (let r = row - rowBack - 1; r <= row + rowFront + 1; r++) {
+    for (let c = col - colBack - 1; c <= col + colFront + 1; c++) {
+      if (r < 0 || r >= GRID_H || c < 0 || c >= GRID_W) continue;
+      // Skip cells inside the footprint itself — only the perimeter ring counts.
+      const inside =
+        r >= row - rowBack && r <= row + rowFront && c >= col - colBack && c <= col + colFront;
+      if (!inside && ISLAND[r][c] === "water") return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Validate that a building of `kind` may be placed with its anchor on
  * (row, col). Location checks only; affordability is the caller's concern
  * (kept separate so the UI can grey out buttons instead of failing taps).
@@ -122,6 +171,10 @@ export function canBuild(
 ): ActionResult {
   if (state.gameOver) return { ok: false, reason: "The island has fallen" };
   if (state.won) return { ok: false, reason: "The settlement has been secured" };
+  const def = BUILDING_DEFS[kind];
+  if (def.requiresWaterAdjacency && !footprintHasWaterAdjacent(row, col, kind)) {
+    return { ok: false, reason: "Farm needs to touch water" };
+  }
   for (const cell of footprintCells(row, col, kind)) {
     if (cell.row < 0 || cell.row >= GRID_H || cell.col < 0 || cell.col >= GRID_W) {
       return { ok: false, reason: "Building would hang off the island" };
@@ -170,38 +223,84 @@ function clamp(v: number, min: number, max: number): number {
 /**
  * Advance the simulation one tick. Pure: returns a new state, never mutates
  * the argument. Order matters and is deliberate:
- *   1. sum income + pollution from every building on the grid (each building
- *      counted ONCE, at its anchor cell — a multi-tile footprint shares one
- *      anchor record, so without the anchor guard a 4x3 factory would bill
- *      12x its income/pollution)
- *   2. apply money, clamp pollution to [0,100]
- *   3. health is a derived quantity (100 - pollution)
- *   4. population grows only while the island is healthy enough
- *   5. pollution == 100 kills the island (game over)
- *   6. surviving TARGET_DAYS ticks wins the run (win takes precedence over a
- *      death only because the two checks are mutually exclusive by tick count)
+ *   1. sum income + pollution + power + food from every building on the grid
+ *      (each building counted ONCE, at its anchor cell — a multi-tile
+ *      footprint shares one anchor record, so without the anchor guard a 4x3
+ *      factory would bill 12x its income/pollution)
+ *   2. factories run only as well as the grid POWERS them AND the population
+ *      STAFFS them: income is scaled by the power ratio and the workforce ratio
+ *      (floor keeps money whole). An understaffed factory is fully idle — it
+ *      stops polluting and stops drawing power too, because it isn't running.
+ *      Other income (farms) is unaffected.
+ *   3. apply money, clamp pollution to [0,100]
+ *   4. health is a derived quantity (100 - pollution)
+ *   5. population grows only while the island is healthy AND fed: houses grow
+ *      while health is high enough, but if food production falls short of the
+ *      population, people starve instead (deltaPop = -min(population, 2)).
+ *      Growth is clamped by total housing capacity — a settlement can't exceed
+ *      what its houses shelter (demolishing houses forces people out).
+ *   6. pollution == 100 kills the island (game over)
+ *   7. surviving TARGET_DAYS ticks wins the run
  */
 export function tick(state: SimState): SimState {
   if (state.gameOver || state.won) return state;
 
   let income = 0;
+  let factoryIncome = 0;
   let pollution = 0;
+  let powerProduced = 0;
+  let powerConsumed = 0;
+  let foodProduced = 0;
+  let housingCapacity = 0;
+  let factoryCount = 0;
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
       const cell = state.grid[r][c];
       if (!cell || cell.row !== r || cell.col !== c) continue;
-      income += BUILDING_DEFS[cell.kind].income;
-      pollution += BUILDING_DEFS[cell.kind].pollution;
+      const def = BUILDING_DEFS[cell.kind];
+      income += def.income;
+      pollution += def.pollution;
+      if (def.power > 0) powerProduced += def.power;
+      else if (def.power < 0) powerConsumed -= def.power;
+      if (def.food > 0) foodProduced += def.food;
+      if (def.housingCapacity) housingCapacity += def.housingCapacity;
+      if (def.workersRequired) {
+        factoryCount += 1;
+        factoryIncome += def.income;
+      }
     }
   }
 
+  // Workforce: a factory needs `workersRequired` people to run at full output;
+  // below that, output scales like the power ratio. Idle factories (the share
+  // of the fleet no workforce is staffing) stop polluting and drawing power.
+  const factoryDef = BUILDING_DEFS.factory;
+  const workersRequired = factoryDef.workersRequired ?? 0;
+  const workersNeeded = factoryCount * workersRequired;
+  const workerEff = workersNeeded > 0 ? Math.min(1, state.population / workersNeeded) : 1;
+  const idleFactories = factoryCount - Math.floor(factoryCount * workerEff);
+  if (idleFactories > 0) {
+    pollution -= idleFactories * factoryDef.pollution;
+    powerConsumed -= idleFactories * -factoryDef.power;
+  }
+
+  // Power efficiency: below 100% coverage every running factory throttles by
+  // the same ratio.
+  const efficiency = powerConsumed > powerProduced ? powerProduced / powerConsumed : 1;
+  const poweredIncome = Math.floor(factoryIncome * efficiency * workerEff);
+
   const next = clone(state);
   next.tick += 1;
-  next.money += income;
+  next.money += income - factoryIncome + poweredIncome;
   next.pollution = clamp(next.pollution + pollution, 0, MAX_POLLUTION);
   next.health = MAX_POLLUTION - next.pollution;
+  next.powerProduced = powerProduced;
+  next.powerConsumed = powerConsumed;
+  next.foodProduced = foodProduced;
+  next.housingCapacity = housingCapacity;
 
-  // Population churn: people flee an unhealthy island.
+  // Population churn: people flee an unhealthy island, and a hungry island
+  // loses population outright regardless of housing.
   let popDelta = 0;
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
@@ -211,7 +310,12 @@ export function tick(state: SimState): SimState {
       popDelta += next.health >= def.popNeedHealth ? def.popGrowth : -def.popGrowth;
     }
   }
-  next.population = clamp(next.population + popDelta, 0, Number.MAX_SAFE_INTEGER);
+  const foodConsumed = next.population;
+  next.foodConsumed = foodConsumed;
+  if (foodProduced < foodConsumed) {
+    popDelta = -Math.min(next.population, 2);
+  }
+  next.population = clamp(next.population + popDelta, 0, housingCapacity);
 
   if (next.pollution >= MAX_POLLUTION) {
     next.health = 0;

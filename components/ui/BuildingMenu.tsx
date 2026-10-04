@@ -6,9 +6,9 @@ import { bus } from "@/game/events/bus";
 import { useGameBridge } from "@/components/ui/useGameBridge";
 
 /**
- * Bottom action bar. Tapping a button selects a building kind (a ghost preview
- * appears on the island); tapping it again deselects and returns to
- * demolish-mode. Each button shows the model's 64x64 preview PNG plus a short
+ * Bottom action bar (NES.css). Tapping a button selects a building kind (a
+ * ghost preview appears on the island); tapping it again deselects and returns
+ * to demolish-mode. Each button shows the model's preview PNG plus a short
  * label, and is guaranteed >=48px tall / >=48px wide for comfortable thumb
  * targets. The longer effect description lives in the aria-label + title
  * instead of cluttering the button face.
@@ -22,7 +22,7 @@ function BuildingIcon({ kind }: { kind: BuildingKind }) {
       alt=""
       width={40}
       height={40}
-      className="h-10 w-10 rounded-md bg-black/40 object-contain"
+      className="h-9 w-9 bg-black/40 object-contain"
       draggable={false}
     />
   );
@@ -36,13 +36,18 @@ export function BuildingMenu() {
   };
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="pointer-events-auto mx-auto max-w-xl rounded-2xl bg-black/65 p-3 shadow-lg backdrop-blur-sm">
-        <div className="grid grid-cols-3 gap-3">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pb-[max(0.2rem,env(safe-area-inset-bottom))]">
+      <div className="is-rounded is-dark hud-panel pointer-events-auto m-0 max-w-xl">
+        <div className="grid grid-cols-3 m-0 p-0">
           {BUILDING_ORDER.map((kind) => {
             const def = BUILDING_DEFS[kind];
             const affordable = state !== null && state.money >= def.cost;
             const active = selected === kind;
+            const cls = active
+              ? "is-primary"
+              : affordable
+                ? ""
+                : "is-disabled";
             return (
               <button
                 key={kind}
@@ -51,28 +56,20 @@ export function BuildingMenu() {
                 aria-pressed={active}
                 aria-label={`${def.label}: ${def.desc}. Cost $${def.cost}`}
                 title={def.desc}
-                className={`flex min-h-14 min-w-12 flex-col items-center justify-center gap-1 rounded-xl px-3 py-2 transition-colors ${
-                  active
-                    ? "bg-emerald-500 text-white shadow-inner ring-2 ring-emerald-300"
-                    : affordable
-                      ? "bg-white/10 text-white hover:bg-white/20 active:bg-white/25"
-                      : "bg-white/5 text-white/40"
-                }`}
+                className={`nes-btn build-btn w-full text-[10px] ${cls} p-0`}
               >
                 <BuildingIcon kind={kind} />
-                <span className="text-xs font-bold leading-none">{def.label}</span>
-                <span className="text-[11px] font-semibold leading-none opacity-90">
-                  ${def.cost}
-                </span>
+                <span>{def.label}</span>
+                <span>${def.cost}</span>
               </button>
             );
           })}
         </div>
-        <p className="mt-2 rounded-lg bg-black/50 px-2 py-1.5 text-center text-[11px] font-semibold text-white/85 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)]">
+        {/* <p className="nes-text mt-2 text-center text-[10px] text-white/85">
           {selected
             ? "Click/tap or drag a tile to build — select again to cancel"
             : "Select a building, or click/tap a building to demolish it"}
-        </p>
+        </p> */}
       </div>
     </div>
   );
